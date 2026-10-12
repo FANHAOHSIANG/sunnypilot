@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import math
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigToggle, BigParamControl, BigCircleParamControl, GreyBigButton
@@ -59,6 +60,31 @@ class DeveloperLayoutMici(NavScroller):
         return
       gui_app.push_widget(dlg)
 
+    def parse_destination(value: str) -> tuple[float, float] | None:
+      try:
+        latitude, longitude = (float(part.strip()) for part in value.split(','))
+      except ValueError:
+        return None
+      if not (math.isfinite(latitude) and math.isfinite(longitude) and -90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+      return latitude, longitude
+
+    def set_destination(value: str):
+      coordinates = parse_destination(value)
+      if coordinates is not None:
+        ui_state.params.put("NavDestination", {"latitude": coordinates[0], "longitude": coordinates[1]}, block=True)
+        self._navigation_destination_btn.set_value(value)
+
+    def enter_destination():
+      destination = ui_state.params.get("NavDestination") or {}
+      default = f"{destination['latitude']}, {destination['longitude']}" if 'latitude' in destination and 'longitude' in destination else ""
+      gui_app.push_widget(BigInputDialog("latitude, longitude", default, confirm_callback=set_destination,
+                                         text_validator=lambda value: parse_destination(value) is not None))
+
+    def clear_destination():
+      ui_state.params.remove("NavDestination")
+      self._navigation_destination_btn.set_value("latitude, longitude")
+
     txt_ssh = gui_app.texture("icons_mici/settings/developer/ssh.png", 56, 64)
     github_username = ui_state.params.get("GithubUsername") or ""
     self._ssh_keys_btn = BigButton("SSH keys", "Not set" if not github_username else github_username, icon=txt_ssh,
@@ -84,7 +110,14 @@ class DeveloperLayoutMici(NavScroller):
                                         description="Use alpha openpilot longitudinal control instead of stock ACC. This may disable Automatic Emergency " +
                                                     "Braking (AEB).")
     self._navigation_toggle = BigParamControl("navigation (alpha)", "NavigationEnabled",
-                                              description="Turn-by-turn navigation with a route map. Set a destination from comma connect.")
+                                              description="Turn-by-turn navigation with a route map. Enter destination coordinates below while parked.")
+    self._navigation_destination_btn = BigButton("set destination", "latitude, longitude",
+                                                 description="Enter latitude, longitude from your phone's map while parked. Example: 25.0339, 121.5645")
+    self._navigation_destination_btn.set_click_callback(enter_destination)
+    self._navigation_destination_btn.set_enabled(lambda: ui_state.is_offroad() and ui_state.params.get_bool("NavigationEnabled"))
+    self._navigation_clear_btn = BigButton("clear destination", "remove current route")
+    self._navigation_clear_btn.set_click_callback(clear_destination)
+    self._navigation_clear_btn.set_enabled(lambda: ui_state.is_offroad() and ui_state.params.get("NavDestination") is not None)
     self._debug_mode_toggle = BigParamControl("ui debug mode", "ShowDebugInfo",
                                               toggle_callback=lambda checked: (gui_app.set_show_touches(checked), gui_app.set_show_fps(checked)),
                                               description="Show touch locations and the UI frame rate.")
@@ -99,6 +132,8 @@ class DeveloperLayoutMici(NavScroller):
       self._alpha_long_toggle,
       self._debug_mode_toggle,
       self._navigation_toggle,
+      self._navigation_destination_btn,
+      self._navigation_clear_btn,
     ])
 
     # Toggle lists
@@ -119,6 +154,8 @@ class DeveloperLayoutMici(NavScroller):
     # Hide non-release toggles on release builds
     for item in release_blocked_toggles:
       item.set_visible(not ui_state.is_release)
+    self._navigation_destination_btn.set_visible(not ui_state.is_release)
+    self._navigation_clear_btn.set_visible(not ui_state.is_release)
 
     # Disable toggles that require offroad
     for item in onroad_blocked_toggles:
@@ -145,6 +182,12 @@ class DeveloperLayoutMici(NavScroller):
 
   def _update_toggles(self):
     ui_state.update_params()
+
+    destination = ui_state.params.get("NavDestination")
+    if destination is not None:
+      self._navigation_destination_btn.set_value(f"{destination['latitude']}, {destination['longitude']}")
+    else:
+      self._navigation_destination_btn.set_value("latitude, longitude")
 
     # CP gating
     if ui_state.CP is not None:
