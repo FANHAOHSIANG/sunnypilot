@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "target_repository": "https://github.com/FANHAOHSIANG/sunnypilot.git",
+  "target_branch": "jetlink-mac-experimental",
+  "source_commit_at_preparation": "1d73b14277391d56a1a19929f6fd1cf6800a72c5",
+  "architecture": "aarch64",
+  "bytes": 2051392,
+  "sha256": "1b3062aca00934c496e723d3a68fa07542c711818d184cae705f3117e337d557",
+  "template_source": "https://install.sunnypilot.ai/fork/TonyBinheWu/master",
+  "template_request_headers": {
+    "User-Agent": "AGNOSSetup-19.7",
+    "X-openpilot-device-type": "mici"
+  },
+  "template_sha256": "9e5f11c622167c09a2fd5b274970f5455128bb600942edf953347ba01c55a497",
+  "changes": "Only the existing reserved GIT_URL and BRANCH_STR string fields were changed, retaining their original sizes and '?' delimiters. ELF code/header/layout unchanged.",
+  "validation": "ARM64 ELF, expected repository/branch, exact local/remote blob hash. C4 execution and full experimental software build remain unverified."
+}
