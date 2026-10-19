@@ -49,11 +49,14 @@ class TogglesLayoutMici(NavScroller):
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
     record_front = BigParamControl("record & upload cabin camera", "RecordFront", toggle_callback=restart_needed_callback)
     record_mic = BigParamControl("record & upload mic audio", "RecordAudio", toggle_callback=restart_needed_callback)
+    jetlink_toggle = BigParamControl("Jetlink Mac (experimental)", "JetlinkEnabled", toggle_callback=restart_needed_callback)
+    jetlink_toggle.set_enabled(lambda: not ui_state.started)
     enable_openpilot = BigParamControl("enable sunnypilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback)
 
     self._scroller.add_widgets([
       self._personality_toggle,
       self._experimental_btn,
+      jetlink_toggle,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -65,6 +68,7 @@ class TogglesLayoutMici(NavScroller):
     # Toggle lists
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
+      ("JetlinkEnabled", jetlink_toggle),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),

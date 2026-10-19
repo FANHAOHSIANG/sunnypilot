@@ -9,6 +9,8 @@ import re
 import time
 import pyray as rl
 
+from openpilot.common.jetlink_status import status_text
+
 from openpilot.cereal import custom
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle, resolve_bundle_by_ref
 from openpilot.common.constants import CV
@@ -52,6 +54,11 @@ class ModelsLayout(Widget):
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
   def _initialize_items(self):
+    self.jetlink_item = toggle_item_sp(
+      "Jetlink Mac (Experimental)",
+      "USB 3 / Cinque v2 only. Select Default small model. Reboot after changing this setting.",
+      param="JetlinkEnabled")
+
     self.small_model_item = ListItemSP(
       title=tr("Small Model"),
       description="",
@@ -106,7 +113,7 @@ class ModelsLayout(Widget):
                                         1, None, True, "", style.BUTTON_ACTION_WIDTH, None, True,
                                         lambda v: f"{v / 100:.2f} m")
 
-    self.items = [self.small_model_item, self.big_model_item, self.cancel_download_item, self.download_item, self.refresh_item, self.clear_cache_item,
+    self.items = [self.jetlink_item, self.small_model_item, self.big_model_item, self.cancel_download_item, self.download_item, self.refresh_item, self.clear_cache_item,
                   self.lane_turn_desire_toggle, self.lane_turn_value_control, self.lagd_toggle, self.delay_control, self.camera_offset]
 
   def _update_lagd_description(self, lagd_toggle: bool):
@@ -310,6 +317,10 @@ class ModelsLayout(Widget):
     return bundle.ref if bundle else "Default"
 
   def _update_state(self):
+    self.jetlink_item.action_item.set_state(ui_state.params.get_bool("JetlinkEnabled"))
+    self.jetlink_item.action_item.set_enabled(not ui_state.started)
+    self.jetlink_item.set_description(status_text() if ui_state.params.get_bool("JetlinkEnabled") else
+                                      "USB 3 / Cinque v2 only. Select Default small model. Reboot after changing this setting.")
     advanced_controls: bool = ui_state.params.get_bool("ShowAdvancedControls")
     turn_desire: bool = ui_state.params.get_bool("LaneTurnDesire")
     live_delay: bool = ui_state.params.get_bool("LagdToggle")

@@ -317,10 +317,20 @@ def main(demo=False):
   assert model is not None
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
+  jetlink_model = None
+  if params.get_bool("JetlinkEnabled") and not chestnut_available:
+    from openpilot.common.hardware import COMMA_HARDWARE
+    if COMMA_HARDWARE:
+      try:
+        from openpilot.selfdrive.modeld.jetlink.model import JoiningModel
+        jetlink_model = JoiningModel(model, vipc_client_main.width, vipc_client_main.height)
+      except Exception:
+        cloudlog.exception("Jetlink adapter unavailable; retaining native model")
+
   # messaging
   pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
-  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"])
+  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay", "selfdriveState"])
 
   publish_state = PublishState()
   params = Params()
@@ -432,11 +442,15 @@ def main(demo=False):
       'action_t': np.array([lat_action_t, long_action_t], dtype=np.float32),
     }
 
+    if jetlink_model is not None:
+      jetlink_model.update(sm, meta_main)
+
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and
                        run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0)
-      model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
+      inference = jetlink_model if jetlink_model is not None else model
+      model_output = inference.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
       if not params.get_bool("ChestnutActive"):
         raise
