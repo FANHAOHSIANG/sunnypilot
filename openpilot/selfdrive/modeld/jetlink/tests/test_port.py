@@ -74,7 +74,7 @@ class ContractTests(unittest.TestCase):
     self.assertEqual(validate_model_spec(DEFAULT_SPEC), DEFAULT_SPEC)
 
   def test_every_identity_and_tensor_contract_field_checked(self):
-    changes = {'sha256': '1' * 64, 'nbytes': 1, 'frame_skip': 1, 'checkpoint': 'other',
+    changes = {'sha256': 'invalid', 'nbytes': 1, 'frame_skip': 1, 'checkpoint': 'other',
                'input_shapes': {'img': [1, 12, 128, 256]}, 'output_shapes': {'outputs': [1, 1]},
                'output_slices': {'plan': [0, 990]}}
     for key, value in changes.items():
@@ -158,7 +158,7 @@ class IpcTests(unittest.TestCase):
           with conn:
             spec = DEFAULT_SPEC.to_dict()
             if wrong_spec:
-              spec['sha256'] = '0' * 64
+              spec['frame_skip'] = 1
             link.send(conn, json.dumps({'spec': spec}).encode())
             if wrong_spec:
               return

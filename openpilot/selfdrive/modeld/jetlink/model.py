@@ -9,7 +9,7 @@ import numpy as np
 
 from openpilot.selfdrive.modeld.jetlink.link import ClientConnection, SPEC, FAULT, state
 from openpilot.selfdrive.modeld.jetlink.prepare import WarpPreparation
-from openpilot.selfdrive.modeld.jetlink.contracts import parse_outputs
+from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
 
 from openpilot.common.jetlink_status import MODEL_STATUS
@@ -56,8 +56,7 @@ class Warp:
     from openpilot.selfdrive.modeld.helpers import dump_oob
     with path.open('wb') as output:
       dump_oob({'identity': (width, height, self.size, SPEC.sha256), 'warp': self.run_warp}, output)
-    # Verify serialization before handing the executable to modeld. The existing
-    # 27-probe exact GPU validation has already selected the implementation.
+    # Verify serialization before handing the executable to modeld.
     restored = Warp(width, height, path.read_bytes())
     rng = np.random.default_rng(7527)
     frames = {k: Tensor(rng.integers(0, 256, self.size, dtype=np.uint8), device='QCOM').realize() for k in ('frame', 'big_frame')}
@@ -111,7 +110,8 @@ class JoiningModel:
     self.error = ''
     self.frame = 0
     self.reset = True
-    self.packed = np.zeros(SPEC.packed_nelem, np.float32)
+    self.spec = SPEC
+    self.packed = np.zeros(self.spec.packed_nelem, np.float32)
     self.views = {name: a.reshape(shape) for (name, shape), a in zip(
       SPEC.packed_shapes.items(), np.split(self.packed, np.cumsum(SPEC.packed_sizes[:-1])), strict=True)}
     self.prev_desire = np.zeros(8, np.float32)
@@ -129,7 +129,8 @@ class JoiningModel:
     if now >= self.next_status:
       tmp = MODEL_STATUS.with_suffix('.tmp')
       tmp.write_text(json.dumps(dict(state='active' if self.active else 'local', active=self.active,
-                                     ready=self.ready, error=self.error, updated=now)))
+                                     ready=self.ready, error=self.error, model=model_name(self.spec),
+                                     sha256=self.spec.sha256, updated=now)))
       os.replace(tmp, MODEL_STATUS)
       self.next_status = now + 1
 
@@ -169,7 +170,10 @@ class JoiningModel:
           client = self.connection.future.result()
           self.connection = None
           self.client = client
-          self.packed[:] = 0
+          self.spec = client.spec
+          self.packed = np.zeros(self.spec.packed_nelem, np.float32)
+          self.views = {name: a.reshape(shape) for (name, shape), a in zip(
+            self.spec.packed_shapes.items(), np.split(self.packed, np.cumsum(self.spec.packed_sizes[:-1])), strict=True)}
           self.prev_desire[:] = 0
           self.reset = True
       except Exception as exc:
@@ -187,11 +191,12 @@ class JoiningModel:
         self.frame = (self.frame + 1) & 0xFFFFFFFF
         images = self.warp(bufs, transforms)
         result = self.client.infer(images, self.packed, self.frame, self.reset)
-        outputs = parse_outputs(self.parser, SPEC, result)
-        self.views['prev_feat'][:] = result[SPEC.output_slices['hidden_state']]
+        outputs = parse_outputs(self.parser, self.spec, result)
+        if 'prev_feat' in self.views:
+          self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
         self.reset = False
         if not self.active:
-          cloudlog.warning('Jetlink active: Cinque v2 %s', SPEC.sha256)
+          cloudlog.warning('Jetlink active: %s %s', model_name(self.spec), self.spec.sha256)
           self.error = ''
           self.next_status = 0
         self.active = True

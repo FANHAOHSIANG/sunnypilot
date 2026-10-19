@@ -54,7 +54,7 @@ class TogglesLayout(Widget):
       ),
       "JetlinkEnabled": (
         lambda: tr("Jetlink Mac (Experimental)"),
-        "Run Cinque v2 on your Mac over USB 3. Select the default small model first. Reboot after changing this setting.",
+        "Run a compatible App-selected model on your Mac over USB 3. Select the default small model first. Reboot after changing this setting.",
         "experimental_white.png",
         True,
       ),

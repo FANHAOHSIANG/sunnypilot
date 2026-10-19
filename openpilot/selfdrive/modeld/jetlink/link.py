@@ -113,8 +113,7 @@ def state():
 
 
 def validate_spec(spec):
-  if spec.to_dict() != SPEC.to_dict():
-    raise ValueError('Jetlink model identity or input/output contract mismatch')
+  return validate_model_spec(spec)
 
 
 class Client:

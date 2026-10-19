@@ -31,8 +31,9 @@ def status_text():
   link = read_status()
   if fault_active():
     return 'Fault — stop and disengage before retrying'
-  if model.get('active') and link.get('state') == 'ready':
-    return 'Active — Mac inference, Cinque v2'
+  if (model.get('active') and link.get('state') == 'ready' and
+      model.get('sha256') == link.get('sha256')):
+    return 'Active — ' + str(model.get('model', 'Mac inference'))
   if model.get('error'):
     return str(model['error'])[:180]
   return str(link.get('error') or link.get('state', 'unavailable'))[:180]

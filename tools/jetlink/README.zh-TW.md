@@ -8,35 +8,48 @@ Jetlink runtime 取自 ajouatom/openpilot carrot-wip
 
 **狀態：程式整合完成，尚未完成 C4 / Mac 實機驗證，不能視為已可上路的版本。**
 
-## 第一版支援範圍
+## App 模型選擇支援範圍
 
-- C4 執行 sunnypilot 的預設（stock）模型執行器。
-- Mac Jetlink 使用 protocol 3，預先載入 Cinque v2 queued ONNX 大模型。
-- 指定模型 SHA256：`09d080f36965bb2a0790500452bd328aa03c484d0222aa79d1ad9f021a522aec`。
-- USB 3 SuperSpeed 實體資料線；沒有網路模式或手機網路設定。
-- sunnypilot 原本的控制器、DesireHelper、RELC、車輛介面與模型訊息發布邏輯保留。
-- 沒接 Mac 時使用原本的 C4 模型；啟用 Jetlink 的開關預設為關閉。
+- C4 保留 sunnypilot 預設（stock）模型執行器，Mac 使用 protocol 3。
+- Mac Jetlink App 選擇並準備好模型後，C4 讀取 App 的 loaded SHA256，
+  驗證完整 spec 後接入，不再只鎖 Cinque v2。
+- 支援相容的 queued 與 stateful 匯出；固定相機布局為 2 × 6 × 128 × 256，
+  frame_skip 為 4，traffic_convention / action_t 各為 1 × 2。
+- queued 模型需提供 desire_pulse、features_buffer 與匹配的 hidden_state；
+  stateful 模型需提供 new_img、desire 與匹配的 state_* / next_state_*。
+- 可解析直接 plan 與舊式五候選 plan。其他必要輸出寬度、切片、範圍與 IPC
+  大小均會檢查；未知格式顯示錯誤並保留本地模型，不會直接放行。
+- 每個連線根據實際 spec 配置緩衝區，重新接入時重設歷史，不沿用上一個模型狀態。
+- USB 3 SuperSpeed 實體資料線；沒有網路或手機網路設定。
+- Jetlink 開關預設關閉；sunnypilot 的控制器、RELC、DesireHelper、車輛介面保留。
 
-**目前不支援：** sunnypilot 自訂模型的 modeld_v2 / split / multi-policy、
-Chestnut 與 Jetlink 同時使用、RL Nav、任意模型切換、外接 HUD／地圖影像。
-選到不支援的本地模型時保留其原生執行器，不強制覆蓋選擇。
-模型 SHA 相同但輸入、輸出、大小或 checkpoint 不同，也會拒絕接入。
+**格式檢查通過不等於已驗證模型的行車表現。** 現在沒有逐一實測 App 清單中的
+每個大模型，因此不宣稱所有清單項目都相容。沒有需要的輸入／輸出、不同影像
+尺寸或需要額外導航輸入的模型仍會拒絕接入。RL Nav 的導航、定位、路線跟隨與
+HUD 也沒有因為開放模型格式而完成整合。
 
-## 停車檢查流程
+仍不支援：sunnypilot 自訂模型的 modeld_v2 / split / multi-policy 本地執行器、
+Chestnut 與 Jetlink 同時使用、HUD／地圖影像通道。選到這些本地執行器時保留
+原生模型，不會強制改選。
 
-1. 使用本分支完成正常的 sunnypilot 編譯／啟動。
-2. C4 的 Models 頁面將 Small Model 選成 Default，移除 Chestnut 裝置。
-3. 在 Models 或 Toggles 開啟 **Jetlink Mac (Experimental)**，重新啟動。
-4. 實際關閉點火；單純啟用 always-offroad 不算完成連線準備。
-5. Mac 開啟支援 protocol 3 的 Jetlink，選擇並完成上述 Cinque v2 模型準備。
-   這個分支不會幫 Mac 下載、轉換或更新模型，也不修改你現有的 Mac 安裝。
-6. 使用 USB 3 資料線連接，保持車輛停止且控制未啟用，等待 Models 顯示
-   `Active — Mac inference, Cinque v2`。`ready` 只代表 USB daemon 就緒。
-7. 若顯示 `waiting`、`retrying`、`unsupported` 或 `blocked`，先保留狀態資訊供排查。
-   不要靠忽略錯誤來啟用控制。
+## 使用與換模型
 
-Mac App 找不到該 SHA256 的 Cinque v2 時，現有模型不能直接替用；需要另外準備
-相符的 ONNX 匯出。既有 RL Nav 模型即使也是 protocol 3，仍不符合本版條件。
+1. 將 C4 更新為本分支，完成正常編譯／啟動；Small Model 選成 Default。
+2. 在 Models 或 Toggles 開啟 **Jetlink Mac (Experimental)**，重新啟動。
+3. 停車、解除控制，並實際關閉點火。always-offroad 介面覆寫不算完成連線準備。
+4. Mac Jetlink App 選擇想使用的大模型，按 App 的 Use Model／準備模型操作，
+   等待載入完成。本分支不負責在 Mac 下載、轉換模型。
+5. 重新連接 USB 3，等待 C4 狀態變成 ready，再在停止且控制未啟用時接入。
+6. Models 顯示 `Active — App model <SHA前12碼>` 才代表 modeld 使用該模型；
+   `ready` 只代表 USB daemon 就緒。Cinque v2 保留原本的名稱。
+7. 換下一個模型時，再次停車、解除控制、關閉點火，於 App 完成載入後重新連線。
+
+App 必須支援 protocol 3 並在推論 telemetry 回報 loaded 模型身分。
+這次修改不要求更換 Mac 的 HUD 程式；若 App 不提供上述資料，C4 會拒絕接入。
+
+若行駛中直接在 App 換模型，不會即時套用新模型；C4 會中止舊連線並要求接手。
+每幀回覆都會核對模型身分，模型已變更／身分缺失的回覆不會轉交 modeld。
+需要回到停車、解除控制並關閉點火後重新連線。
 
 ## 斷線與切換行為
 
@@ -69,8 +82,11 @@ DEV=CPU python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests 
 git diff --check
 ```
 
-2026-10-20 驗證：25 項通過，1 項 CPU warp 像素檢查因環境沒有 clang 而跳過。
-已驗證：固定模型契約、sunnypilot 真實 parser 的輸出形狀、protocol 3 上游
+2026-10-20 更新驗證：40 項通過；1 項 CPU warp 像素檢查因測試環境未初始化
+pinned tinygrad submodule 而跳過。先前環境也未能執行此檢查（缺 clang）。
+已驗證：動態模型契約、queued／stateful 緩衝區與真實 parser 輸出、舊式多候選
+plan、選模過程點火／身分改變的拒絕、模型身分變更回覆不轉交、本地 daemon
+與 Client 的 socketpair 往返，以及 protocol 3 上游
 請求／回覆雜湊向量、分段串流、錯誤版本、非數值、過期 frame、逾時、停車接入
 條件、失敗鎖存與原生模型復原。IPC 串流使用 socketpair，沒有實際 USB 裝置。
 

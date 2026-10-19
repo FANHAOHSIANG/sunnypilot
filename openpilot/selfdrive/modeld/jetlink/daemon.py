@@ -1,12 +1,13 @@
 """USB bulk owner; no USB setup or model loading on modeld's realtime thread.
 
-This first port uses protocol 3, a preloaded Cinque v2 app engine, and no HUD,
+This port uses protocol 3, a compatible preloaded App-selected engine, and no HUD,
 navigation, Wi-Fi provisioning or phone networking side channels.
 """
 import fcntl
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -17,7 +18,7 @@ import numpy as np
 from openpilot.common.jetlink_status import STATUS
 from openpilot.selfdrive.modeld.jetlink import VENDOR
 from openpilot.selfdrive.modeld.jetlink.link import SOCKET, SPEC, REQUEST, REPLY, PacketReader, send, send_parts
-from openpilot.selfdrive.modeld.jetlink.contracts import validate_model_spec
+from openpilot.selfdrive.modeld.jetlink.contracts import model_name, validate_model_spec
 from jetlink.client import JetlinkClient
 from jetlink.transport.ffs import FfsTransport
 
@@ -40,9 +41,11 @@ class SafeTransport(FfsTransport):
       raise UnsafeCleanupError('USB gadget remains bound; reboot offroad before retrying')
 
 
-def publish(state, **extra):
+def publish(state, spec=None, **extra):
   tmp = STATUS.with_suffix('.tmp')
-  tmp.write_text(json.dumps(dict(state=state, updated=time.monotonic(), model='Cinque v2', **extra)))
+  tmp.write_text(json.dumps(dict(state=state, updated=time.monotonic(),
+                                model=model_name(spec) if spec else 'App selection',
+                                sha256=spec.sha256 if spec else None, **extra)))
   os.replace(tmp, STATUS)
 
 
@@ -65,51 +68,85 @@ def cleanup(transport):
     raise UnsafeCleanupError('USB gadget remains bound; reboot offroad before retrying')
 
 
-def check_loaded(client):
+class ModelChanged(RuntimeError):
+  pass
+
+
+def require_selected(current, spec):
+  if not isinstance(current, dict) or current.get('loaded') != spec.sha256:
+    raise ModelChanged('Mac model changed or did not report its identity; reconnect with ignition off')
+
+
+def check_loaded(client, spec):
+  require_selected(client.state(), spec)
+
+
+def prepare_selected(client, peer, offroad):
+  if not isinstance(peer, dict) or type(peer.get('protocol')) is not int or peer['protocol'] != 3:
+    raise ValueError('Mac Jetlink protocol 3 is required')
+  selected = peer.get('loaded')
+  if not isinstance(selected, str) or re.fullmatch('[0-9a-f]{64}', selected) is None:
+    raise ValueError('Select and prepare a driving model in the Jetlink App, then reconnect with ignition off')
+  if not offroad():
+    raise RuntimeError('Turn ignition off before changing the Jetlink model')
   current = client.state()
-  if not isinstance(current, dict) or current.get('loaded') != SPEC.sha256:
-    raise ValueError('Mac engine changed; select Cinque v2 again with ignition off')
+  if not isinstance(current, dict) or current.get('loaded') != selected:
+    raise ModelChanged('App selection changed during handshake; reconnect offroad')
+  try:
+    spec = validate_model_spec(client.ensure_engine(selected, SPEC.nbytes if selected == SPEC.sha256 else 0,
+                                                  frame_skip=4, build_timeout=30, should_stop=lambda: not offroad()))
+    if spec.sha256 != selected:
+      raise ModelChanged('The prepared engine does not match the App selection')
+    if not offroad():
+      raise RuntimeError('Ignition started during model preparation; reconnect offroad')
+    check_loaded(client, spec)
+    return spec
+  finally:
+    client.progress_cb = None
+    client._should_stop = lambda: False
 
 
 def serve_local(listener, client):
+  spec = validate_model_spec(client.spec)
   last_status = last_ping = 0.
   while host_attached():
     now = time.monotonic()
     if now - last_status >= 1:
-      publish('ready', sha256=SPEC.sha256, timings=list(client.last_timings))
+      publish('ready', spec=spec, timings=list(client.last_timings))
       last_status = now
     try:
       connection, _ = listener.accept()
     except TimeoutError:
       if time.monotonic() - last_ping >= 2:
-        check_loaded(client)
+        check_loaded(client, spec)
         last_ping = time.monotonic()
       continue
     with connection:
       connection.settimeout(.5)
-      reader = PacketReader(REQUEST.size + SPEC.warped_nbytes + SPEC.packed_nbytes)
+      reader = PacketReader(REQUEST.size + spec.warped_nbytes + spec.packed_nbytes)
       try:
-        check_loaded(client)
-        send(connection, json.dumps({'spec': SPEC.to_dict()}).encode())
+        check_loaded(client, spec)
+        send(connection, json.dumps({'spec': spec.to_dict()}).encode())
         while host_attached():
           if time.monotonic() - last_status >= 1:
-            publish('ready', sha256=SPEC.sha256, timings=list(client.last_timings))
+            publish('ready', spec=spec, timings=list(client.last_timings))
             last_status = time.monotonic()
           try:
             request = reader.receive(connection)
           except TimeoutError:
-            check_loaded(client)
+            check_loaded(client, spec)
             continue
-          if len(request) != REQUEST.size + SPEC.warped_nbytes + SPEC.packed_nbytes:
+          if len(request) != REQUEST.size + spec.warped_nbytes + spec.packed_nbytes:
             raise ValueError('Invalid local inference packet size')
           frame, reset, _ = REQUEST.unpack_from(request)
           if reset not in (0, 1):
             raise ValueError('Invalid reset flag')
-          images = np.frombuffer(request, np.uint8, SPEC.warped_nbytes, REQUEST.size).reshape(SPEC.warped_shape)
-          packed = np.frombuffer(request, np.float32, SPEC.packed_nelem, REQUEST.size + SPEC.warped_nbytes)
+          images = np.frombuffer(request, np.uint8, spec.warped_nbytes, REQUEST.size).reshape(spec.warped_shape)
+          packed = np.frombuffer(request, np.float32, spec.packed_nelem, REQUEST.size + spec.warped_nbytes)
           if not np.all(np.isfinite(packed)):
             raise ValueError('Nonfinite local model input')
-          output = client.infer(images, packed, frame, reset=bool(reset))
+          output = client.infer(images, packed, frame, reset=bool(reset), want_state=True)
+          require_selected(client.last_state, spec)
           send_parts(connection, REPLY.pack(frame, *client.last_timings), output)
       except (ConnectionError, BrokenPipeError, ValueError) as exc:
         log.info('Local client ended: %s', exc)
@@ -173,22 +210,16 @@ def main():
         transport.protocol_version = 3
         client = JetlinkClient(transport, name='sunnypilot-jetlink')
         peer = client.hello()
-        if peer.get('protocol') != 3 or peer.get('loaded') != SPEC.sha256:
-          raise ValueError('In Mac Jetlink select and prepare Cinque v2 (09d080f36965), then reconnect offroad')
         if (Path('/sys/class/udc') / udc / 'current_speed').read_text().strip() not in ('super-speed', 'super-speed-plus'):
           raise ValueError('This port requires a USB 3 data cable at SuperSpeed')
-        if params.get_bool('IsOnroad'):
-          raise RuntimeError('Ignition started during setup; retry with ignition off')
-        validate_model_spec(client.ensure_engine(SPEC.sha256, SPEC.nbytes, frame_skip=SPEC.frame_skip,
-                                                build_timeout=30, should_stop=lambda: params.get_bool('IsOnroad')))
-        if params.get_bool('IsOnroad'):
-          raise RuntimeError('Ignition started before warmup completed')
-        client.progress_cb = None
-        client._should_stop = lambda: False
+        offroad = lambda: params.get_bool('IsOffroad') and not params.get_bool('IsOnroad')
+        spec = prepare_selected(client, peer, offroad)
         for frame in range(3):
-          if params.get_bool('IsOnroad'):
+          if not offroad():
             raise RuntimeError('Ignition started during warmup; reconnect offroad')
-          client.infer(np.zeros(SPEC.warped_shape, np.uint8), np.zeros(SPEC.packed_nelem, np.float32), frame, reset=True)
+          client.infer(np.zeros(spec.warped_shape, np.uint8), np.zeros(spec.packed_nelem, np.float32),
+                       frame, reset=True, want_state=True)
+          require_selected(client.last_state, spec)
         serve_local(listener, client)
       except UnsafeCleanupError as exc:
         blocked = str(exc)[:300]

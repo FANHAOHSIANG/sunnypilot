@@ -56,7 +56,7 @@ class ModelsLayout(Widget):
   def _initialize_items(self):
     self.jetlink_item = toggle_item_sp(
       "Jetlink Mac (Experimental)",
-      "USB 3 / Cinque v2 only. Select Default small model. Reboot after changing this setting.",
+      "USB 3 / compatible App-selected models. Select Default small model. Reboot after changing this setting.",
       param="JetlinkEnabled")
 
     self.small_model_item = ListItemSP(
@@ -320,7 +320,7 @@ class ModelsLayout(Widget):
     self.jetlink_item.action_item.set_state(ui_state.params.get_bool("JetlinkEnabled"))
     self.jetlink_item.action_item.set_enabled(not ui_state.started)
     self.jetlink_item.set_description(status_text() if ui_state.params.get_bool("JetlinkEnabled") else
-                                      "USB 3 / Cinque v2 only. Select Default small model. Reboot after changing this setting.")
+                                      "USB 3 / compatible App-selected models. Select Default small model. Reboot after changing this setting.")
     advanced_controls: bool = ui_state.params.get_bool("ShowAdvancedControls")
     turn_desire: bool = ui_state.params.get_bool("LaneTurnDesire")
     live_delay: bool = ui_state.params.get_bool("LagdToggle")
