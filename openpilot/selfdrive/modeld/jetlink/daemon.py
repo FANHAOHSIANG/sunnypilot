@@ -176,6 +176,8 @@ def serve_local(listener, client):
 
 def main():
   from openpilot.common.params import Params
+  from openpilot.cereal import messaging
+  from openpilot.selfdrive.modeld.jetlink.ignition import ignition_off
   from openpilot.selfdrive.modeld.helpers import chestnut_present
   from openpilot.sunnypilot.models.helpers import get_active_model_runner
   from openpilot.cereal import custom
@@ -184,6 +186,8 @@ def main():
   os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
   os.sched_setaffinity(0, set(range(min(4, os.cpu_count() or 1))))
   params = Params()
+  ignition_sm = messaging.SubMaster(['deviceState', 'pandaStates'])
+  offroad = lambda: ignition_off(params, ignition_sm)
   lock = open('/dev/shm/sunnypilot-jetlink.lock', 'w')
   fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
   Path(SOCKET).unlink(missing_ok=True)
@@ -205,7 +209,7 @@ def main():
         continue
       # Setup/re-enumeration and every engine handshake require actual ignition
       # off, even if the UI has an always-offroad override.
-      if params.get_bool('IsOnroad') or not params.get_bool('IsOffroad'):
+      if not offroad():
         publish('waiting', error='Turn ignition off to connect the Mac Jetlink app')
         time.sleep(1)
         continue
@@ -236,7 +240,6 @@ def main():
         peer = client.hello()
         if (Path('/sys/class/udc') / udc / 'current_speed').read_text().strip() not in ('super-speed', 'super-speed-plus'):
           raise ValueError('This port requires a USB 3 data cable at SuperSpeed')
-        offroad = lambda: params.get_bool('IsOffroad') and not params.get_bool('IsOnroad')
         spec = prepare_selected(client, peer, offroad)
         for frame in range(3):
           if not offroad():
