@@ -15,3 +15,6 @@ default protocol remain v2; these changes do not publish a new Jetson release.
 the production daemon now uses the extended `JetlinkClient`.
 Carrot's adapter, device-role policy, process placement and deployment tools are
 outside this directory. Updating the protocol requires testing both peers.
+
+Registry catalog.py and lfs.py updated unchanged from zoompilot/jetlink
+`d24328d849b0e5154b55f149dc18c5dfe8bd79cc` for V3 and precompiled export resolution.

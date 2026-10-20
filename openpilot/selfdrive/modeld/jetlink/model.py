@@ -1,5 +1,5 @@
 """Native camera warp and a guarded switch between local and Jetlink inference."""
-import io
+import tempfile
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ import numpy as np
 
 from openpilot.selfdrive.modeld.jetlink.link import ClientConnection, SPEC, FAULT, state
 from openpilot.selfdrive.modeld.jetlink.prepare import WarpPreparation
-from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs
+from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
 
 from openpilot.common.jetlink_status import MODEL_STATUS
@@ -37,15 +37,27 @@ class Warp:
     if prepared is not None:
       inputs_ready = time.monotonic()
       from openpilot.selfdrive.modeld.helpers import load_oob
-      value = load_oob(io.BytesIO(prepared))
+      with tempfile.NamedTemporaryFile(prefix="jetlink-warp-", dir="/dev/shm") as artifact:
+        artifact.write(prepared)
+        artifact.flush()
+        value = load_oob(artifact.name)
+      from tinygrad.engine.realize import lower_and_compile
+      value["warp"].captured._linear = lower_and_compile(value["warp"].captured._linear)
       if value['identity'] != (width, height, self.size, SPEC.sha256):
         raise ValueError('prepared Jetlink warp contract mismatch')
       self.run_warp = value['warp']
       self.init_timings = (inputs_ready - started, time.monotonic() - inputs_ready, time.thread_time() - cpu_started)
       return
     from tinygrad import Tensor, TinyJit
-    from openpilot.selfdrive.modeld.compile_modeld import NV12Frame, make_warp
-    self.run_warp = TinyJit(make_warp(NV12Frame(width, height, *get_nv12_info(width, height)), 512, 256))
+    # The C4 launcher symlinks tinygrad, but not its examples package.
+    # This import runs only in the isolated offroad preparation subprocess.
+    import sys
+    tinygrad_root = str(Path(__file__).resolve().parents[4] / 'tinygrad_repo')
+    if tinygrad_root not in sys.path:
+      sys.path.append(tinygrad_root)
+    from tinygrad_repo.examples.openpilot.compile_warp import NV12Frame, make_frame_prepare
+    warp = make_frame_prepare(NV12Frame(width, height, *get_nv12_info(width, height)), 512, 256)
+    self.run_warp = TinyJit(lambda tfm, big_tfm, frame, big_frame: warp(frame, tfm).stack(warp(big_frame, big_tfm)))
     dummy = {k: Tensor(np.zeros(self.size, np.uint8), device='QCOM').realize() for k in ('frame', 'big_frame')}
     for _ in range(3):
       result = self.run_warp(**self.inputs, **dummy).numpy()
@@ -53,9 +65,8 @@ class Warp:
         raise ValueError('unexpected camera warp contract')
   def save_prepared(self, path, width, height):
     from tinygrad import Tensor
-    from openpilot.selfdrive.modeld.helpers import dump_oob
-    with path.open('wb') as output:
-      dump_oob({'identity': (width, height, self.size, SPEC.sha256), 'warp': self.run_warp}, output)
+    from tinygrad_repo.examples.openpilot.helpers import dump_pickle
+    dump_pickle({'identity': (width, height, self.size, SPEC.sha256), 'warp': self.run_warp}, path)
     # Verify serialization before handing the executable to modeld.
     restored = Warp(width, height, path.read_bytes())
     rng = np.random.default_rng(7527)
@@ -116,6 +127,11 @@ class JoiningModel:
       SPEC.packed_shapes.items(), np.split(self.packed, np.cumsum(SPEC.packed_sizes[:-1])), strict=True)}
     self.prev_desire = np.zeros(8, np.float32)
 
+  @property
+  def lat_smooth_seconds(self):
+    # Official CTV3M catalog override; applies only while V3 is driving.
+    return .1 if self.active and self.spec.sha256 == V3_SPEC.sha256 else 0.
+
   def update(self, sm, metadata):
     now = time.monotonic()
     self.join_allowed = may_join(now, {k: sm[k] for k in ('carState', 'selfdriveState', 'carControl')},
@@ -139,7 +155,7 @@ class JoiningModel:
     for array in self.small.npy.values():
       array[:] = 0
     for name, tensor in self.small.input_queues.items():
-      if name.endswith('_q'):
+      if name.endswith('_q') or name in getattr(self.small, 'state_pairs', {}):
         tensor._buffer().copyin(memoryview(bytearray(tensor.numel() * tensor.dtype.itemsize)))
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):

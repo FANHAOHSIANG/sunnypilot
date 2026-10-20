@@ -8,6 +8,8 @@ from jetlink.spec import ModelSpec
 
 DEFAULT_SPEC = ModelSpec.from_dict(json.loads(Path(__file__).with_name('cinque_v2.json').read_text()))
 
+V3_SPEC = ModelSpec.from_dict(json.loads(Path(__file__).with_name('cinque_v3.json').read_text()))
+
 # Widths consumed by sunnypilot's stock parser, publisher and action calculation.
 OUTPUT_WIDTHS = {
   'lane_lines': (528,), 'lane_lines_prob': (8,), 'road_edges': (264,),
@@ -77,12 +79,17 @@ def validate_model_spec(spec):
   action = spec.output_slices.get('action')
   if action is not None and slice_range(spec, action)[1] - slice_range(spec, action)[0] not in (2, 4):
     raise ValueError('Unsupported Jetlink action output')
-  if spec.sha256 == DEFAULT_SPEC.sha256 and spec.to_dict() != DEFAULT_SPEC.to_dict():
+  known = next((known for known in (DEFAULT_SPEC, V3_SPEC) if spec.sha256 == known.sha256), None)
+  def identity(value):
+    return {k: v for k, v in value.to_dict().items() if not (known is V3_SPEC and k == 'checkpoint')}
+  if known is not None and identity(spec) != identity(known):
     raise ValueError('Jetlink model identity or input/output contract mismatch')
   return spec
 
 
 def model_name(spec):
+  if spec.sha256 == V3_SPEC.sha256:
+    return 'Cinque Terre V3'
   return 'Cinque v2' if spec.sha256 == DEFAULT_SPEC.sha256 else f'App model {spec.sha256[:12]}'
 
 

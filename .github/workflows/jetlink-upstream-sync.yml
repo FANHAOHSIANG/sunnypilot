@@ -1,0 +1,81 @@
+name: Jetlink upstream sync
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: jetlink-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'FANHAOHSIANG/sunnypilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      TARGET_BRANCH: jetlink-tony-sp-v3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: jetlink-tony-sp-v3
+          fetch-depth: 0
+          lfs: false
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Merge Tony and sunnypilot
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add tony https://github.com/TonyBinheWu/sunnypilot.git
+          git remote add sp https://github.com/sunnypilot/sunnypilot.git
+          git fetch --no-tags tony master
+          git fetch --no-tags sp master
+          original=$(git rev-parse HEAD)
+          git merge --no-edit tony/master
+          git merge --no-edit sp/master
+          if [ "$original" = "$(git rev-parse HEAD)" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="sync/jetlink-$(git rev-parse --short=10 tony/master)-$(git rev-parse --short=10 sp/master)"
+          git switch -c "$branch"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - name: Check Jetlink integration
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          python -m pip install numpy pytest
+          python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
+          python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/modeld/modeld.py
+          PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
+          python -m unittest openpilot.selfdrive.ui.tests.test_sunnylink_translations -v
+          git -c core.whitespace=-blank-at-eof diff --check HEAD~1 HEAD
+      - name: Open an update PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_BRANCH: ${{ steps.merge.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never move the installed branch. Conflicts or failed checks stop this job.
+          if git ls-remote --exit-code --heads origin "$SYNC_BRANCH" >/dev/null 2>&1; then
+            echo 'This upstream pair already has a sync branch.'
+            exit 0
+          fi
+          git push origin "HEAD:refs/heads/$SYNC_BRANCH"
+          gh pr create --base "$TARGET_BRANCH" --head "$SYNC_BRANCH" \
+            --title 'Sync Jetlink with Tony and sunnypilot upstream' \
+            --body 'Merges the latest Tony and official sunnypilot master. Jetlink software regression checks passed. Review runtime and UI changes and validate on C4 before merging. This PR does not update installed devices.'

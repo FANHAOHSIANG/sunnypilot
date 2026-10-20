@@ -1,12 +1,42 @@
 # sunnypilot + Mac Jetlink 實驗分支
 
-本分支以 TonyBinheWu/sunnypilot `master` 的
-`c6f579b270ec04cb2f50901cd5d7187614af41c3` 為基底。
+本分支 `jetlink-tony-sp-v3` 整合：
+
+- TonyBinheWu/sunnypilot master：`c6f579b270ec04cb2f50901cd5d7187614af41c3`（2026-09-07）。
+- sunnypilot/sunnypilot master：`922513f3128b00611d695ce465989a9bc8af9d59`（2026-10-19 UTC）。
+- Tony 的 sunnylink 日文、繁體中文、韓文翻譯保留。
 Jetlink runtime 取自 ajouatom/openpilot carrot-wip
 `ba186915179816a9b0476cec52bf321e73d2d4b0`；原有 MIT 授權保留於
 `third_party/jetlink/LICENSE`，上游版本紀錄見 `UPSTREAM.md`。
 
 **狀態：程式整合完成，尚未完成 C4 / Mac 實機驗證，不能視為已可上路的版本。**
+
+## Cinque Terre V3
+
+- 官方 CTV3M ref：`bf3e3631b3f91d92a1020a5e0dd4298b93ff4244`。
+- Mac 執行的 ONNX SHA256：`404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4`，766,354,845 bytes。
+- V3 使用 stateful 輸入；歷史狀態留在 Mac，不透過 USB 傳送。C4 以 stock Parser 解碼，採用官方 CTV3M 的 0.1 秒橫向平滑設定。
+- V3 輸入／輸出 fixture 與 ONNX 身分取自 zoompilot/jetlink `d24328d849b0e5154b55f149dc18c5dfe8bd79cc` 的 test_model_state.py 與 test_registry.py；此分支沒有重新執行實際 V3 網路。
+- registry/catalog.py 與 lfs.py 同步到該 Jetlink revision，支援包含 V3 的 v26 清單與較新清單探測，也能從預編譯 pkl 的來源 commit 找到 ONNX。
+- 官方本機模型選擇器已隨上游升級為 selector 21、Chestnut catalog v28。**Mac 模式仍需在 Mac App 選 V3**；C4 的 Chestnut 下載按鈕是另一種硬體的編譯檔，不能當作 Mac 模型使用。
+- 請使用支援 V3、protocol 3 的 Jetlink Mac App。更新 C4 分支不會替換 Mac 上已安裝的 App；App 的清單若沒有 V3，需更新 App 並重新整理清單。
+- C4 的模型狀態可顯示 Cinque Terre V3，Jetlink 關閉或遠端故障時仍使用預設本機小模型。
+
+## 跟隨上游更新
+
+`.github/workflows/jetlink-upstream-sync.yml` 每日 03:23 UTC（台灣 11:23）及手動執行：
+
+1. 讀取 Tony 與 sunnypilot 官方 master，合併至暫存分支。
+2. 執行 Jetlink、V3、registry 及 Tony 翻譯回歸檢查。
+3. 通過後開 PR 到 `jetlink-tony-sp-v3`。衝突或檢查失敗會停止，需人工修正；不直接更新 C4 或自動合併。
+
+排程需要同一 workflow 安裝在儲存庫 default branch `master`，且 GitHub Actions 允許建立 PR。只在功能分支放置 workflow 不會啟動排程。Actions 頁的執行紀錄才是成功同步的依據。
+
+## 驗證與安裝狀態
+
+軟體檢查包含 Jetlink 45 項通過、1 項 CPU warp 像素檢查因缺 clang 跳過；上游 registry 48 項通過；Tony 翻譯 3 項通過。另做 Python 語法與變更空白檢查。未完成完整 AGNOS/C4 編譯、QCOM warp 序列化、USB 延遲、實際 V3 推論及行車驗證。
+
+既有 `c4-install` 仍指向舊 `jetlink-mac-experimental`，本次不更換該安裝入口。先前 99%／逗號畫面尚無裝置日誌，不能宣稱此次更新已解決。新分支須先完成 C4 啟動與停車測試。
 
 ## App 模型選擇支援範圍
 

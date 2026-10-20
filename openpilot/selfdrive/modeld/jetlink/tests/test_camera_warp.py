@@ -30,13 +30,15 @@ class CameraWarpTests(unittest.TestCase):
 
     # Load the actual native warp function bodies without the compiler's
     # unrelated hardware detection/firmware side effects on a workstation.
-    source = ast.parse((ROOT / 'openpilot/selfdrive/modeld/compile_modeld.py').read_text())
+    source = ast.parse((ROOT / 'tinygrad_repo/examples/openpilot/compile_warp.py').read_text())
     names = {'warp_perspective_tinygrad', 'frames_to_tensor', 'make_frame_prepare', 'make_warp'}
     scope = {'Tensor': Tensor, 'Device': Device, 'Context': Context, 'NV12Frame': tuple}
     code = ast.Module(body=[n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names], type_ignores=[])
     exec(compile(code, '<native sunnypilot camera warp>', 'exec'), scope)
     nv12 = namedtuple('NV12', 'width height stride y_height uv_height size')(64, 48, 128, 64, 32, 12288)
-    warp = scope['make_warp'](nv12, 512, 256)
+    prepare = scope['make_frame_prepare'](nv12, 512, 256)
+    def warp(tfm, big_tfm, frame, big_frame):
+      return prepare(frame, tfm).stack(prepare(big_frame, big_tfm))
     rng = np.random.default_rng(7527)
     images = [rng.integers(0, 256, nv12.size, dtype=np.uint8) for _ in range(2)]
 
