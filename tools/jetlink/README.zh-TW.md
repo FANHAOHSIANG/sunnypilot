@@ -10,6 +10,14 @@ Jetlink 原始移植取自 `jetlink-tony-sp-v3` `53b0fb2`。
 
 **狀態：軟體整合／檢查通過，未完成 C4 啟動、QCOM、USB 或實際模型推論驗證。**
 
+## Panda 編譯配對修正
+
+0.11.3 合併曾帶入 Panda `8a16e08`，其 `safety_tick()` 與 HKG safety 的
+`void safety_tick(const safety_config *cfg)` 不相容。Panda 現固定回 HKG 原配套
+`4230530f5ec4c7f11971f868ae9930b3547346eb`，保留 opendbc `1c51731`。
+沒有刪除 safety 檢查、改動 safety header 或繞過韌體編譯。新增來源介面檢查與
+push CI 防止再次配錯。此修正已核對宣告與呼叫；尚待 C4 實際重新編譯驗證。
+
 ## 基底與依賴
 
 - HKG opendbc：`1c51731784729da5ebaf24b3c34106bd27aaf94b`，來源 TonyBinheWu/opendbc。
