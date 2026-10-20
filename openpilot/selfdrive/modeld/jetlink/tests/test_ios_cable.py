@@ -57,7 +57,7 @@ class CableTests(unittest.TestCase):
           frame = peer.recv(2)
           self.assertEqual(frame.msg_type, P.Msg.INFER_REQ)
           self.assertEqual(bytes(frame.payload), bytes([size % 251]) * size)
-          peer.send(P.Msg.INFER_RESP, frame.seq, (bytes(frame.payload),))
+          peer.send(P.Msg.INFER_RESP, frame.seq, (bytes(frame.payload),) if frame.payload.nbytes else ())
       except BaseException as exc:
         errors.append(exc)
       finally:

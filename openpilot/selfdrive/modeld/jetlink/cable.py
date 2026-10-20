@@ -25,6 +25,12 @@ class CableTransport(TcpTransport):
     super().__init__(sock)
     self.protocol_version = 3
 
+  def send(self, msg_type, seq, parts=(), flags=0, timeout=None):
+    # Empty iovecs can otherwise remain after a complete sendmsg and make
+    # the older stream transport mistake a zero-byte write for disconnect.
+    parts = tuple(part for part in parts if memoryview(part).nbytes)
+    return super().send(msg_type, seq, parts, flags, timeout)
+
   def link_info(self):
     return usb_link_info("cable", udc_speed())
 

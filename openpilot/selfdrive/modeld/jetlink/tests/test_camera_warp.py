@@ -1,7 +1,7 @@
 """CPU pixel/layout check of sunnypilot's native warp against NumPy NV12 sampling.
 
 Requires the pinned tinygrad submodule. This establishes CPU pixel/layout
-parity only, not QCOM GPU execution, serialization or realtime timing.
+sampling parity away from float32 half-pixel boundaries, not QCOM GPU execution, serialization or realtime timing.
 """
 import ast
 from collections import namedtuple
@@ -42,14 +42,20 @@ class CameraWarpTests(unittest.TestCase):
     rng = np.random.default_rng(7527)
     images = [rng.integers(0, 256, nv12.size, dtype=np.uint8) for _ in range(2)]
 
-    def reference(frame, matrix):
+    def reference(frame, matrix, direction=(0, 0)):
       def plane(chroma=False, channel=0):
         width, height = (256, 128) if chroma else (512, 256)
         x, y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
         m = matrix * (np.array([[1, 1, .5], [1, 1, .5], [2, 2, 1]], np.float32) if chroma else 1)
         denominator = m[2, 0] * x + m[2, 1] * y + m[2, 2]
-        sx = np.rint((m[0, 0] * x + m[0, 1] * y + m[0, 2]) / denominator)
-        sy = np.rint((m[1, 0] * x + m[1, 1] * y + m[1, 2]) / denominator)
+        sx = (m[0, 0] * x + m[0, 1] * y + m[0, 2]) / denominator
+        sy = (m[1, 0] * x + m[1, 1] * y + m[1, 2]) / denominator
+        # Fused CPU float32 arithmetic can land on either side of an exact
+        # half-pixel. Permit only source pixels reached within 16 float32
+        # ulps of the projected coordinate; every other pixel stays exact.
+        epsilon = 16 * np.finfo(np.float32).eps
+        sx = np.rint(sx + direction[0] * epsilon * np.maximum(1, np.abs(sx)))
+        sy = np.rint(sy + direction[1] * epsilon * np.maximum(1, np.abs(sy)))
         sx = sx.clip(0, nv12.width // (2 if chroma else 1) - 1).astype(int)
         sy = sy.clip(0, nv12.height // (2 if chroma else 1) - 1).astype(int)
         at = (nv12.stride * nv12.y_height + sy * nv12.stride + sx * 2 + channel
@@ -68,7 +74,11 @@ class CameraWarpTests(unittest.TestCase):
         expected = np.stack([reference(images[0], m), reference(images[1], wide)])
         self.assertEqual(actual.shape, (2, 6, 128, 256))
         self.assertEqual(actual.dtype, np.uint8)
-        np.testing.assert_array_equal(actual, expected)
+        allowed = actual == expected
+        for direction in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
+          candidate = np.stack([reference(images[0], m, direction), reference(images[1], wide, direction)])
+          allowed |= actual == candidate
+        self.assertTrue(allowed.all(), f"{np.count_nonzero(~allowed)} pixels differ outside float32 half-pixel boundaries")
 
 
 if __name__ == '__main__':
