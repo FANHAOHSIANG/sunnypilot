@@ -12,7 +12,7 @@ import numpy as np
 import test_port
 from openpilot.selfdrive.modeld.jetlink import model
 from openpilot.selfdrive.modeld.jetlink import daemon, link
-from openpilot.selfdrive.modeld.jetlink.contracts import DEFAULT_SPEC, validate_model_spec, parse_outputs
+from openpilot.selfdrive.modeld.jetlink.contracts import DEFAULT_SPEC, V3_SPEC, validate_model_spec, parse_outputs
 from openpilot.selfdrive.modeld.jetlink.daemon import ModelChanged, prepare_selected, require_selected
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from jetlink.spec import ModelSpec
@@ -171,8 +171,8 @@ class DynamicModelTests(unittest.TestCase):
 
 
 class DaemonIpcTests(unittest.TestCase):
-  def exercise(self, stateful, change_model=False):
-    spec = graph(stateful)
+  def exercise(self, stateful, change_model=False, spec=None):
+    spec = graph(stateful) if spec is None else spec
     remote = Mock()
     remote.spec = spec
     remote.state.return_value = {'loaded': spec.sha256}
@@ -231,6 +231,9 @@ class DaemonIpcTests(unittest.TestCase):
 
   def test_dynamic_stateful_daemon_and_local_client_roundtrip(self):
     self.exercise(stateful=True)
+
+  def test_v3_daemon_and_local_client_roundtrip(self):
+    self.exercise(stateful=True, spec=V3_SPEC)
 
   def test_changed_model_reply_never_reaches_local_client(self):
     self.exercise(stateful=True, change_model=True)

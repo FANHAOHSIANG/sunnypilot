@@ -34,7 +34,7 @@ Jetlink runtime 取自 ajouatom/openpilot carrot-wip
 
 ## 驗證與安裝狀態
 
-軟體檢查包含 Jetlink 45 項通過、1 項 CPU warp 像素檢查因缺 clang 跳過；上游 registry 48 項通過；Tony 翻譯 3 項通過。另做 Python 語法與變更空白檢查。未完成完整 AGNOS/C4 編譯、QCOM warp 序列化、USB 延遲、實際 V3 推論及行車驗證。
+軟體檢查包含 Jetlink 46 項通過、1 項 CPU warp 像素檢查因缺 clang 跳過；上游 registry 48 項通過；Tony 翻譯 3 項通過。另做 Python 語法、未定義名稱與變更空白檢查。未完成完整 AGNOS/C4 編譯、QCOM warp 序列化、USB 延遲、實際 V3 推論及行車驗證。
 
 既有 `c4-install` 仍指向舊 `jetlink-mac-experimental`，本次不更換該安裝入口。先前 99%／逗號畫面尚無裝置日誌，不能宣稱此次更新已解決。新分支須先完成 C4 啟動與停車測試。
 
@@ -71,7 +71,7 @@ Chestnut 與 Jetlink 同時使用、HUD／地圖影像通道。選到這些本�
    等待載入完成。本分支不負責在 Mac 下載、轉換模型。
 5. 重新連接 USB 3，等待 C4 狀態變成 ready，再在停止且控制未啟用時接入。
 6. Models 顯示 `Active — App model <SHA前12碼>` 才代表 modeld 使用該模型；
-   `ready` 只代表 USB daemon 就緒。Cinque v2 保留原本的名稱。
+   `ready` 只代表 USB daemon 就緒。已知模型會顯示 Cinque v2 或 Cinque Terre V3。
 7. 換下一個模型時，再次停車、解除控制、關閉點火，於 App 完成載入後重新連線。
 
 App 必須支援 protocol 3 並在推論 telemetry 回報 loaded 模型身分。
@@ -112,8 +112,8 @@ DEV=CPU python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests 
 git diff --check
 ```
 
-2026-10-20 更新驗證：40 項通過；1 項 CPU warp 像素檢查因測試環境未初始化
-pinned tinygrad submodule 而跳過。先前環境也未能執行此檢查（缺 clang）。
+2026-10-20 V3 更新驗證：46 項 Jetlink 測試通過；1 項 CPU warp 像素檢查
+因缺 clang 跳過。新版 pinned tinygrad submodule 已初始化。
 已驗證：動態模型契約、queued／stateful 緩衝區與真實 parser 輸出、舊式多候選
 plan、選模過程點火／身分改變的拒絕、模型身分變更回覆不轉交、本地 daemon
 與 Client 的 socketpair 往返，以及 protocol 3 上游
@@ -129,12 +129,12 @@ plan、選模過程點火／身分改變的拒絕、模型身分變更回覆不�
 關閉 JetlinkEnabled，重新啟動，或切回原本已驗證的分支。這個分支不改寫 Mac
 檔案、韌體或車輛 CAN safety 設定。不要在行駛中切換軟體分支。
 
-## 安裝停在 99% 的下載改善（2026-10-20）
+## 下載量與先前 99% 問題
 
-此 Mac Jetlink 分支不支援實體 Chestnut 同時使用，因此新安裝會略過
-`big_driving_supercombo.onnx`（765,950,064 bytes）的 LFS 下載。檔案留作
-LFS 指標，不是可在 C4 執行的模型。原生小模型與駕駛監控模型仍完整下載，
-供 C4 回退與監控使用；Mac App 的模型準備不受這個設定影響。
+此 Mac Jetlink 分支不支援實體 Chestnut 同時使用，因此略過 Chestnut 權重。
+官方最新基底改用 `big_driving_tinygrad.pkl`（799,941,965 bytes）；它保留為
+LFS 指標，不是可執行的模型。Jetlink 開啟時不因 Mac USB 線而啟動 Chestnut
+載入。原生小模型與駕駛監控模型仍保留；Mac App 的模型準備不受影響。
 
 七個子模組改採 shallow clone，保留各自原本的固定 commit，減少歷史資料下載。
 
@@ -142,7 +142,6 @@ LFS 指標，不是可在 C4 執行的模型。原生小模型與駕駛監控模
 舊安裝器的進度只解析部分 Git 訊息，LFS 與子模組可能在同一個百分比等待，
 也可能發生本機網路或 Git 錯誤；仍需本機紀錄才能確認個別裝置狀況。
 
-驗證：以相同 `git clone --depth=1 --recurse-submodules` 流程對修改後版本
-重新取得檔案，確認原生小模型及駕駛監控完整，Chestnut 大模型維持指標，
-其餘 268 個 LFS 檔案 SHA256 及七個子模組 commit 均已核對。
-LFS 實際下載總量為 120,268,487 bytes，略過的 Chestnut 權重為 765,950,064 bytes。未於 C4 完成安裝／編譯實測。
+先前舊基底 b0b790e 的完整 clone 檢查曾核對其餘 268 個 LFS 檔與七個子模組，
+下載 120,268,487 bytes、略過舊 ONNX 765,950,064 bytes。這是舊基底的紀錄，
+不代表本次官方更新後的下載量；新版尚未重跑完整 LFS clone 或 C4 編譯測試。
