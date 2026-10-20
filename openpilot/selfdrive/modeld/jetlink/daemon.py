@@ -1,7 +1,7 @@
 """USB bulk owner; no USB setup or model loading on modeld's realtime thread.
 
 This port uses protocol 3, a compatible preloaded App-selected engine, and no HUD,
-navigation, Wi-Fi provisioning or phone networking side channels.
+navigation or Wi-Fi provisioning. iOS mode uses only a USB NCM network.
 """
 import fcntl
 import json
@@ -21,6 +21,7 @@ from openpilot.selfdrive.modeld.jetlink.link import SOCKET, SPEC, REQUEST, REPLY
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, validate_model_spec
 from jetlink.client import JetlinkClient
 from jetlink.transport.ffs import FfsTransport
+from openpilot.selfdrive.modeld.jetlink.cable import accept_phone
 
 GADGET = '/sys/kernel/config/usb_gadget/jetlink'
 USB_DATA_ROLE = Path('/sys/class/usbpd/usbpd0/current_dr')
@@ -89,13 +90,22 @@ def cleanup(transport):
     raise UnsafeCleanupError('USB gadget remains bound; reboot offroad before retrying')
 
 
+def root_command(command):
+  if os.geteuid() != 0:
+    command = ['sudo', '-n'] + command
+  result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+  if result.returncode:
+    raise RuntimeError('USB setup failed: ' + result.stderr[-300:])
+  return result
+
+
 class ModelChanged(RuntimeError):
   pass
 
 
 def require_selected(current, spec):
   if not isinstance(current, dict) or current.get('loaded') != spec.sha256:
-    raise ModelChanged('Mac model changed or did not report its identity; reconnect with ignition off')
+    raise ModelChanged('App model changed or did not report its identity; reconnect with ignition off')
 
 
 def check_loaded(client, spec):
@@ -104,7 +114,7 @@ def check_loaded(client, spec):
 
 def prepare_selected(client, peer, offroad):
   if not isinstance(peer, dict) or type(peer.get('protocol')) is not int or peer['protocol'] != 3:
-    raise ValueError('Mac Jetlink protocol 3 is required')
+    raise ValueError('Jetlink App protocol 3 is required')
   selected = peer.get('loaded')
   if not isinstance(selected, str) or re.fullmatch('[0-9a-f]{64}', selected) is None:
     raise ValueError('Select and prepare a driving model in the Jetlink App, then reconnect with ignition off')
@@ -186,6 +196,8 @@ def main():
   os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
   os.sched_setaffinity(0, set(range(min(4, os.cpu_count() or 1))))
   params = Params()
+  ios_mode = params.get_bool('JetlinkIOS')  # mode changes require a reboot
+  ios_setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'ios-root.sh'
   ignition_sm = messaging.SubMaster(['deviceState', 'pandaStates'])
   offroad = lambda: ignition_off(params, ignition_sm)
   lock = open('/dev/shm/sunnypilot-jetlink.lock', 'w')
@@ -210,33 +222,43 @@ def main():
       # Setup/re-enumeration and every engine handshake require actual ignition
       # off, even if the UI has an always-offroad override.
       if not offroad():
-        publish('waiting', error='Turn ignition off to connect the Mac Jetlink app')
+        publish('waiting', error='Turn ignition off to connect the Jetlink App')
         time.sleep(1)
         continue
       if not host_attached():
         port = port_status()
         hint = ('C4 is USB host; use a USB 3 hub/USB-A adapter and A-to-C data cable to the Mac'
-                if port['data_role'] == 'dfp' else 'Connect a USB 3 data cable and start Jetlink on the Mac')
+                if port['data_role'] == 'dfp' else 'Connect a USB 3 data cable and open the Jetlink App')
         publish('waiting', error=hint, usb=port)
         time.sleep(1)
         continue
       transport = None
+      gadget_owner = None
+      ios_started = False
       try:
         publish('connecting')
         functions = Path(GADGET, 'functions')
-        if functions.exists() and any(p.name != 'ffs.jetlink' for p in functions.iterdir()):
+        allowed = {'ffs.jetlink', 'ncm.usb0'} if ios_mode else {'ffs.jetlink'}
+        if functions.exists() and any(p.name not in allowed for p in functions.iterdir()):
           raise RuntimeError('Existing Jetlink gadget has other USB functions; remove the previous installation before using this port')
-        setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'setup_gadget.sh'
-        command = ['bash', str(setup)]
-        if os.geteuid() != 0:
-          command = ['sudo', '-n'] + command
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
-        if result.returncode:
-          raise RuntimeError('USB setup failed: ' + result.stderr[-300:])
         udc = next(Path('/sys/class/udc').iterdir()).name
-        transport = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
+        if ios_mode:
+          ios_started = True
+          root_command(['bash', str(ios_setup), 'gadget', '--ios'])
+          # Hold ep0 and descriptors, but never read/write bulk endpoints:
+          # the iOS App uses the NCM interface, not FunctionFS.
+          gadget_owner = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
+          root_command(['bash', str(ios_setup), 'net'])
+          network = Path('/dev/shm/jetlink-net').read_text().strip()
+          if not network.startswith('ok 192.168.60.1 '):
+            raise RuntimeError('USB network setup failed: ' + network[:200])
+          transport = accept_phone(offroad, host_attached, publish)
+        else:
+          setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'setup_gadget.sh'
+          root_command(['bash', str(setup)])
+          transport = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
         transport.protocol_version = 3
-        client = JetlinkClient(transport, name='sunnypilot-jetlink')
+        client = JetlinkClient(transport, name='sunnypilot-jetlink-ios' if ios_mode else 'sunnypilot-jetlink')
         peer = client.hello()
         if (Path('/sys/class/udc') / udc / 'current_speed').read_text().strip() not in ('super-speed', 'super-speed-plus'):
           raise ValueError('This port requires a USB 3 data cable at SuperSpeed')
@@ -256,7 +278,18 @@ def main():
         publish('retrying', error=str(exc)[:300])
       finally:
         try:
-          cleanup(transport)
+          if ios_mode:
+            try:
+              if transport is not None:
+                transport.close()
+            finally:
+              try:
+                cleanup(gadget_owner)
+              finally:
+                if ios_started:
+                  root_command(['bash', str(ios_setup), 'teardown'])
+          else:
+            cleanup(transport)
         except Exception as exc:
           blocked = str(exc)[:300]
           publish('blocked', error=blocked)

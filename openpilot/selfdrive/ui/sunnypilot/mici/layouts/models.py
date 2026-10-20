@@ -84,14 +84,38 @@ class ModelsLayoutMici(NavScroller):
     self._was_downloading = False
     self._selection_source: str | None = None
 
+    self.jetlink_btn = BigButton("Jetlink")
+    self.jetlink_btn.set_click_callback(self._select_jetlink_mode)
+
     self.select_model_btn = BigButton(tr("select model"))
     self.select_model_btn.set_click_callback(self._show_folders)
 
     self.cancel_download_btn = BigButton(tr("cancel download"))
     self.cancel_download_btn.set_click_callback(lambda: ui_state.params.remove("ModelManager_DownloadRef"))
 
-    self.main_items = [self.current_model_info, self.select_model_btn, self.cancel_download_btn]
+    self.main_items = [self.current_model_info, self.jetlink_btn, self.select_model_btn, self.cancel_download_btn]
     self._scroller.add_widgets(self.main_items)
+
+  def _select_jetlink_mode(self):
+    if not ui_state.is_offroad():
+      return
+    buttons = []
+    for label, enabled, ios in (("off", False, False),
+                                ("Mac / Jetson", True, False),
+                                ("iPhone / iPad", True, True)):
+      button = BigButton(label)
+      button.set_click_callback(lambda e=enabled, i=ios: self._set_jetlink_mode(e, i))
+      buttons.append(button)
+    self._push_selection_view(buttons)
+
+  def _set_jetlink_mode(self, enabled, ios):
+    if not ui_state.is_offroad():
+      return
+    ui_state.params.put_bool("JetlinkIOS", ios, block=True)
+    ui_state.params.put_bool("JetlinkEnabled", enabled, block=True)
+    self._pop_to_main()
+    gui_app.push_widget(BigDialog(title="Restart required",
+                                  description="Restart C4 to apply. For Jetlink, select the default small model and connect with ignition off."))
 
   @property
   def model_manager(self):
@@ -194,6 +218,9 @@ class ModelsLayoutMici(NavScroller):
   def _update_state(self):
     super()._update_state()
 
+    self.jetlink_btn.set_enabled(ui_state.is_offroad())
+    self.jetlink_btn.set_value(("iPhone / iPad" if ui_state.params.get_bool("JetlinkIOS") else "Mac / Jetson")
+                               if ui_state.params.get_bool("JetlinkEnabled") else "off")
     self.select_model_btn.set_enabled(ui_state.is_offroad())
     self.cancel_download_btn.set_visible(False)
     self.current_model_info.current_model_header._shimmer = False

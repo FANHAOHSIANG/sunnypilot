@@ -1,4 +1,4 @@
-# hkg-enhanced + Mac Jetlink / Cinque Terre V3
+# hkg-enhanced + Jetlink (Mac / iPhone / iPad) / Cinque Terre V3
 
 本分支 `hkg-enhanced-jetlink` 直接建立在 TonyBinheWu/sunnypilot **hkg-enhanced**
 `d648262a015dfba1d8391d935c7fa93ea8214561`（2026-10-20）。
@@ -8,7 +8,12 @@ Jetlink 原始移植取自 `jetlink-tony-sp-v3` `53b0fb2`。
 本次官方合併保留 Tony 的 HKG torque 資料庫、導航、藍色路徑與停車標記。
 沒有改寫車輛 CAN safety 設定。
 
-**狀態：軟體整合／檢查通過，未完成 C4 啟動、QCOM、USB 或實際模型推論驗證。**
+**狀態：使用者已確認 C4 能進入介面，並提供 Panda SPI 成功連線紀錄；Jetlink USB、QCOM 遠端推論與行車尚未實機驗證。**
+
+## iPhone / iPad
+
+新增共用的 iPhone / iPad 模式，適用於 USB 3 的 iPhone 15 Pro Max 與 iPad Air M4。
+詳見 [安裝與驗證步驟](README.iOS.zh-TW.md)。同時只連一台運算裝置；仍保留 Mac 模式。
 
 ## Panda 編譯配對修正
 
@@ -16,7 +21,7 @@ Jetlink 原始移植取自 `jetlink-tony-sp-v3` `53b0fb2`。
 `void safety_tick(const safety_config *cfg)` 不相容。Panda 現固定回 HKG 原配套
 `4230530f5ec4c7f11971f868ae9930b3547346eb`，保留 opendbc `1c51731`。
 沒有刪除 safety 檢查、改動 safety header 或繞過韌體編譯。新增來源介面檢查與
-push CI 防止再次配錯。此修正已核對宣告與呼叫；尚待 C4 實際重新編譯驗證。
+push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續已確認 C4 完成編譯、Panda SPI 連線並進入介面。
 
 ## 基底與依賴
 
@@ -31,7 +36,7 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；尚待 C4 實�
 ## 使用 Jetlink
 
 1. 在 C4 選 **預設 Small Model / stock runner**。
-2. 開啟 **Jetlink Mac (experimental)**，重新啟動 C4。
+2. 開啟 **Jetlink → Mac / Jetson**，重新啟動 C4。
 3. 停車、解除控制、實際關閉點火，再建立 USB 3 連線。
 4. Mac 的 protocol-3 Jetlink App 選模型並準備完成，C4 讀取實際 loaded SHA256。
 5. 使用真實 ModelSpec 檢查輸入、輸出切片、大小與模型身分。ready 代表 daemon
@@ -39,7 +44,7 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；尚待 C4 實�
 6. 換模型時再次停車、解除控制、關閉點火，待 App 載入完成再重新連線。
 
 仍不支援：自訂本機 modeld_v2/split/multi-policy runner、Chestnut 與 Mac
-同時使用、Jetlink HUD/地圖/導航影像通道、iOS USB 網路。
+同時使用、Jetlink HUD/地圖/導航影像通道。
 
 支援符合契約的 queued/stateful 匯出；格式相容不等於每個模型已完成行車驗證。
 目前不宣稱 App 清單上的每個模型都能用。遠端失敗會鎖存 fault，透過既有
