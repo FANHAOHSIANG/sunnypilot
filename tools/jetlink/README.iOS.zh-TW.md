@@ -44,10 +44,11 @@ iPad M4 或 iPhone 的晶片名稱本身不保證 V3 可持續 20 Hz。
   沒有增加 UDP frame 路徑，先使用 TCP。
 - 使用現有 protocol 3、SHA256 身分確認、ModelSpec 契約、熄火檢查與三幀暖機。
   不宣稱 App 的全部模型都符合本分支的輸出契約。
-- 連線結束先關閉 phone socket，再釋放 ep0／gadget 和 DHCP；清理不完整時停止重試。
+- App 連線結束只關閉 TCP socket；NCM、DHCP 與 ep0 在 daemon 生命週期內保持，避免 AGNOS 4.9 重建 NCM 卡死。初始化失敗就停止重試，需重新啟動 C4；切換 Mac/iOS 亦需重新啟動。
+- iOS 推論附帶 thermal telemetry，未含 loaded 時另查 STATE_RESP 的模型身分；每幀先清除舊 telemetry，仍拒絕身分不符／不明。額外狀態查詢的 USB 延遲仍需實機量測。
 - ios-root.sh 原封不動取自 zoompilot/jetlink
   d24328d849b0e5154b55f149dc18c5dfe8bd79cc 的 jetlink/comma/jetlink-root.sh，
-  保留 MIT 版權聲明。本 adapter 只呼叫 gadget --ios、net、teardown。
+  保留 MIT 版權聲明。本 adapter 只呼叫 gadget --ios、net，不自動呼叫 teardown 移除 NCM。
   該上游檔案包含其他子命令，本 adapter 不呼叫它們。
 - 軟體測試包含 protocol 3 透過本地 socket 的 hello/state/二進位資料、
   USB 子網限制、點火改變／拔線／逾時清理、參數表和既有模型契約回歸。

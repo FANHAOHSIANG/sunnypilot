@@ -178,7 +178,10 @@ class DaemonIpcTests(unittest.TestCase):
     remote.state.return_value = {'loaded': spec.sha256}
     remote.last_state = {'loaded': 'b'*64 if change_model else spec.sha256}
     remote.last_timings = (1, 2, 3)
-    remote.infer.return_value = np.zeros(spec.output_nelem, np.float32)
+    def infer(*args, **kwargs):
+      remote.last_state = {'loaded': 'b'*64 if change_model else spec.sha256}
+      return np.zeros(spec.output_nelem, np.float32)
+    remote.infer.side_effect = infer
     server, endpoint = socket.socketpair()
     listener = Mock()
     listener.accept.side_effect = [(server, None), ModelChanged('test session completed')]

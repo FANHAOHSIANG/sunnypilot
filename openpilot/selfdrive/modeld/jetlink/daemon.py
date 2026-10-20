@@ -21,7 +21,7 @@ from openpilot.selfdrive.modeld.jetlink.link import SOCKET, SPEC, REQUEST, REPLY
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, validate_model_spec
 from jetlink.client import JetlinkClient
 from jetlink.transport.ffs import FfsTransport
-from openpilot.selfdrive.modeld.jetlink.cable import accept_phone
+from openpilot.selfdrive.modeld.jetlink.cable import accept_phone, PersistentIOSGadget
 
 GADGET = '/sys/kernel/config/usb_gadget/jetlink'
 USB_DATA_ROLE = Path('/sys/class/usbpd/usbpd0/current_dr')
@@ -112,6 +112,19 @@ def check_loaded(client, spec):
   require_selected(client.state(), spec)
 
 
+def infer_selected(client, spec, images, packed, frame, reset):
+  # Swift/iOS sends thermal telemetry on INFER_RESP; loaded SHA is only in
+  # STATE_RESP. Never reuse an earlier frame's telemetry as its identity.
+  client.last_state = None
+  output = client.infer(images, packed, frame, reset=reset, want_state=True)
+  state = client.last_state
+  if isinstance(state, dict) and 'loaded' in state:
+    require_selected(state, spec)
+  else:
+    check_loaded(client, spec)
+  return output
+
+
 def prepare_selected(client, peer, offroad):
   if not isinstance(peer, dict) or type(peer.get('protocol')) is not int or peer['protocol'] != 3:
     raise ValueError('Jetlink App protocol 3 is required')
@@ -176,8 +189,7 @@ def serve_local(listener, client):
           packed = np.frombuffer(request, np.float32, spec.packed_nelem, REQUEST.size + spec.warped_nbytes)
           if not np.all(np.isfinite(packed)):
             raise ValueError('Nonfinite local model input')
-          output = client.infer(images, packed, frame, reset=bool(reset), want_state=True)
-          require_selected(client.last_state, spec)
+          output = infer_selected(client, spec, images, packed, frame, bool(reset))
           send_parts(connection, REPLY.pack(frame, *client.last_timings), output)
       except (ConnectionError, BrokenPipeError, ValueError) as exc:
         log.info('Local client ended: %s', exc)
@@ -209,6 +221,7 @@ def main():
   listener.listen(1)
   listener.settimeout(.05)
   blocked = None
+  ios_gadget = PersistentIOSGadget()
   try:
     while True:
       if blocked:
@@ -233,8 +246,6 @@ def main():
         time.sleep(1)
         continue
       transport = None
-      gadget_owner = None
-      ios_started = False
       try:
         publish('connecting')
         functions = Path(GADGET, 'functions')
@@ -243,15 +254,15 @@ def main():
           raise RuntimeError('Existing Jetlink gadget has other USB functions; remove the previous installation before using this port')
         udc = next(Path('/sys/class/udc').iterdir()).name
         if ios_mode:
-          ios_started = True
-          root_command(['bash', str(ios_setup), 'gadget', '--ios'])
-          # Hold ep0 and descriptors, but never read/write bulk endpoints:
-          # the iOS App uses the NCM interface, not FunctionFS.
-          gadget_owner = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
-          root_command(['bash', str(ios_setup), 'net'])
-          network = Path('/dev/shm/jetlink-net').read_text().strip()
-          if not network.startswith('ok 192.168.60.1 '):
-            raise RuntimeError('USB network setup failed: ' + network[:200])
+          try:
+            ios_gadget.ensure(
+              lambda: root_command(['bash', str(ios_setup), 'gadget', '--ios']),
+              lambda: SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc),
+              lambda: root_command(['bash', str(ios_setup), 'net']),
+              lambda: Path('/dev/shm/jetlink-net').read_text().strip())
+          except Exception as exc:
+            blocked = 'iOS USB initialization failed; reboot before retrying: ' + str(exc)[:220]
+            raise
           transport = accept_phone(offroad, host_attached, publish)
         else:
           setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'setup_gadget.sh'
@@ -266,9 +277,8 @@ def main():
         for frame in range(3):
           if not offroad():
             raise RuntimeError('Ignition started during warmup; reconnect offroad')
-          client.infer(np.zeros(spec.warped_shape, np.uint8), np.zeros(spec.packed_nelem, np.float32),
-                       frame, reset=True, want_state=True)
-          require_selected(client.last_state, spec)
+          infer_selected(client, spec, np.zeros(spec.warped_shape, np.uint8),
+                         np.zeros(spec.packed_nelem, np.float32), frame, True)
         serve_local(listener, client)
       except UnsafeCleanupError as exc:
         blocked = str(exc)[:300]
@@ -279,15 +289,10 @@ def main():
       finally:
         try:
           if ios_mode:
-            try:
-              if transport is not None:
-                transport.close()
-            finally:
-              try:
-                cleanup(gadget_owner)
-              finally:
-                if ios_started:
-                  root_command(['bash', str(ios_setup), 'teardown'])
+            # Keep NCM and ep0 for the daemon's lifetime. Removing/recreating
+            # NCM after a model/session error can wedge the AGNOS 4.9 driver.
+            if transport is not None:
+              transport.close()
           else:
             cleanup(transport)
         except Exception as exc:
@@ -295,6 +300,8 @@ def main():
           publish('blocked', error=blocked)
       time.sleep(2)
   finally:
+    if ios_gadget.owner is not None:
+      cleanup(ios_gadget.owner)
     listener.close()
     Path(SOCKET).unlink(missing_ok=True)
     publish('stopped')

@@ -70,3 +70,28 @@ def accept_phone(offroad, present, announce, timeout=60.0):
     raise TimeoutError("No iPhone/iPad connection on USB; check Local Network permission and USB 3 cable/hub")
   finally:
     listener.close()
+
+
+class PersistentIOSGadget:
+  """Initialize NCM once per daemon; never remove/recreate it on session retry."""
+  def __init__(self):
+    self.owner = None
+    self.ready = False
+    self.failed = None
+
+  def ensure(self, setup, make_owner, net, status):
+    if self.failed is not None:
+      raise RuntimeError("iOS gadget initialization already failed; reboot: " + self.failed)
+    if self.ready:
+      return
+    try:
+      setup()
+      self.owner = make_owner()
+      net()
+      network = status()
+      if not network.startswith("ok 192.168.60.1 "):
+        raise RuntimeError("USB network setup failed: " + network[:200])
+      self.ready = True
+    except Exception as exc:
+      self.failed = str(exc)
+      raise

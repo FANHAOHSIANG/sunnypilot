@@ -134,10 +134,90 @@ class CableTests(unittest.TestCase):
 
   def test_daemon_keeps_bulk_owner_separate_from_phone_socket(self):
     source = (Path(__file__).resolve().parents[1] / "daemon.py").read_text()
-    self.assertIn("gadget_owner = SafeTransport", source)
+    self.assertIn("ios_gadget.ensure(", source)
     self.assertIn("transport = accept_phone(offroad, host_attached, publish)", source)
-    self.assertIn("cleanup(gadget_owner)", source)
-    self.assertIn("['bash', str(ios_setup), 'teardown']", source)
+    self.assertIn("cleanup(ios_gadget.owner)", source)
+    self.assertNotIn("['bash', str(ios_setup), 'teardown']", source)
+
+
+class PersistentGadgetTests(unittest.TestCase):
+  def test_multiple_sessions_do_not_recreate_ncm(self):
+    gadget = cable.PersistentIOSGadget()
+    setup, owner, net, status = Mock(), Mock(), Mock(), Mock(return_value="ok 192.168.60.1 usb1")
+    for _ in range(3):
+      gadget.ensure(setup, owner, net, status)
+    setup.assert_called_once()
+    owner.assert_called_once()
+    net.assert_called_once()
+    self.assertTrue(gadget.ready)
+
+  def test_net_failure_is_latched_without_removing_or_recreating(self):
+    gadget = cable.PersistentIOSGadget()
+    setup, owner, net = Mock(), Mock(), Mock()
+    with self.assertRaisesRegex(RuntimeError, "USB network setup failed"):
+      gadget.ensure(setup, owner, net, lambda: "error: no netdev")
+    with self.assertRaisesRegex(RuntimeError, "already failed"):
+      gadget.ensure(setup, owner, net, lambda: "ok 192.168.60.1 usb1")
+    setup.assert_called_once()
+    owner.assert_called_once()
+    gadget.owner.close.assert_not_called()
+
+  def test_gadget_setup_failure_never_attempts_again(self):
+    gadget = cable.PersistentIOSGadget()
+    setup = Mock(side_effect=RuntimeError("NCM failed"))
+    owner, net = Mock(), Mock()
+    for _ in range(2):
+      with self.assertRaises(RuntimeError):
+        gadget.ensure(setup, owner, net, lambda: "")
+    setup.assert_called_once()
+    owner.assert_not_called()
+    net.assert_not_called()
+
+class FrameIdentityTests(unittest.TestCase):
+  def setUp(self):
+    from openpilot.selfdrive.modeld.jetlink import daemon
+    self.daemon = daemon
+    self.spec = Mock(sha256="a" * 64)
+    self.client = Mock()
+    self.client.state.return_value = {"loaded": "a" * 64}
+    self.client.last_state = {"loaded": "a" * 64}
+
+  def infer(self, telemetry):
+    def result(*args, **kwargs):
+      self.client.last_state = telemetry
+      return "output"
+    self.client.infer.side_effect = result
+    return self.daemon.infer_selected(self.client, self.spec, None, None, 1, True)
+
+  def test_swift_thermal_telemetry_uses_explicit_state_identity(self):
+    self.assertEqual(self.infer({"thermal": "nominal"}), "output")
+    self.client.state.assert_called_once()
+
+  def test_swift_state_reports_changed_model(self):
+    self.client.state.return_value = {"loaded": "b" * 64}
+    with self.assertRaises(self.daemon.ModelChanged):
+      self.infer({"thermal": "nominal"})
+
+  def test_missing_identity_in_both_responses_rejected(self):
+    self.client.state.return_value = {"thermal": "nominal"}
+    with self.assertRaises(self.daemon.ModelChanged):
+      self.infer({})
+
+  def test_wrong_identity_not_masked_by_a_later_matching_state(self):
+    with self.assertRaises(self.daemon.ModelChanged):
+      self.infer({"loaded": "b" * 64})
+    self.client.state.assert_not_called()
+
+  def test_mac_identity_does_not_need_extra_state_request(self):
+    self.assertEqual(self.infer({"loaded": "a" * 64}), "output")
+    self.client.state.assert_not_called()
+
+  def test_no_telemetry_cannot_reuse_previous_frame_identity(self):
+    self.client.infer.return_value = "output"
+    self.client.state.return_value = {"loaded": "b" * 64}
+    with self.assertRaises(self.daemon.ModelChanged):
+      self.daemon.infer_selected(self.client, self.spec, None, None, 1, False)
+    self.assertIsNone(self.client.last_state)
 
 if __name__ == "__main__":
   unittest.main()
