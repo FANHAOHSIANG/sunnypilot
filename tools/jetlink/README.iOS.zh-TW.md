@@ -16,7 +16,8 @@ iPad M4 或 iPhone 的晶片名稱本身不保證 V3 可持續 20 Hz。
 ## C4
 
 1. 停車、熄火、保持獨立供電。
-2. 模型設定 → Select model → Small models → Default，不能保留 C210M / tinygrad runner。
+2. 啟用 Jetlink 時，實際執行器固定為 stock，使用內建 Default 小模型作後備。
+   已選的 C210M／Chestnut 模型仍保存；關閉 Jetlink 並重新啟動後恢復原本選擇，不必清除設定。
 3. 模型設定頁新增 Jetlink → iPhone / iPad。設定後重新啟動 C4。
    大介面的設定頁另有 Jetlink 開關和 iPhone / iPad mode 開關。
 4. 使用 USB 3 資料線。若直連無法枚舉或供電不穩，使用有獨立供電的 USB 3 Hub：

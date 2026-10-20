@@ -125,6 +125,9 @@ def get_active_bundle(params: Params | None = None, *, chestnut: bool | None = N
   # no cross-slot fallback: an empty active slot means the hardware default, which
   # only stock modeld can run - modeld_v2 requires a real bundle
   params = params or Params()
+  # Keep saved picks, but Jetlink only runs stock modeld with its built-in fallback.
+  if params.get_bool("JetlinkEnabled"):
+    return None
   return get_selected_bundle(params, get_active_source(chestnut=chestnut))
 
 
@@ -168,7 +171,7 @@ def validate_active_bundles(params: Params, source_bundles: dict[str, list[custo
 def get_active_model_runner(params: Params | None = None, force_check: bool = False) -> int:
   params = params or Params()
   cached_runner_type = params.get("ModelRunnerTypeCache")
-  if cached_runner_type is not None and not force_check:
+  if cached_runner_type is not None and not force_check and not params.get_bool("JetlinkEnabled"):
     return cached_runner_type
   runner_type = custom.ModelManagerSP.Runner.stock
   if active_bundle := get_active_bundle(params):

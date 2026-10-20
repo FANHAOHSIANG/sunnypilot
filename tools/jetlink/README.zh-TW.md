@@ -35,7 +35,7 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續
 
 ## 使用 Jetlink
 
-1. 在 C4 選 **預設 Small Model / stock runner**。
+1. 開啟 Jetlink 時自動使用 **內建 Small Model / stock runner** 作後備；保存原本本機模型選擇，關閉並重新啟動後恢復。
 2. 開啟 **Jetlink → Mac / Jetson**，重新啟動 C4。
 3. 停車、解除控制、實際關閉點火，再建立 USB 3 連線。
 4. Mac 的 protocol-3 Jetlink App 選模型並準備完成，C4 讀取實際 loaded SHA256。
