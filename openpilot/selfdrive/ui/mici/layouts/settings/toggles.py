@@ -65,6 +65,8 @@ class TogglesLayoutMici(NavScroller):
                                  toggle_callback=restart_needed_callback,
                                  description="Record microphone audio while driving.\n" +
                                              "Audio is included in dashcam videos in sunnylink.")
+    jetlink_toggle = BigParamControl("Jetlink Mac (experimental)", "JetlinkEnabled", toggle_callback=restart_needed_callback)
+    jetlink_toggle.set_enabled(lambda: not ui_state.started)
     enable_openpilot = BigParamControl("enable sunnypilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback,
                                        description="Enable to use sunnypilot driver assistance.\n" +
                                                    "Disable to use your car's stock driver assistance.")
@@ -73,6 +75,7 @@ class TogglesLayoutMici(NavScroller):
     self._scroller.add_widgets([
       self._personality_toggle,
       self._experimental_btn,
+      jetlink_toggle,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -83,6 +86,7 @@ class TogglesLayoutMici(NavScroller):
 
     # Toggle lists
     self._refresh_toggles = (
+      ("JetlinkEnabled", jetlink_toggle),
       ("ExperimentalMode", self._experimental_btn),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),

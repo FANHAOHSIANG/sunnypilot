@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 import pyray as rl
 
+from openpilot.common.jetlink_status import status_text
 from openpilot.cereal import custom
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
@@ -23,6 +24,11 @@ def _model_info() -> tuple[str, str, str]:
   """(active model, info header, info text) for the panel. Runner-matched: the
   active line names what actually drives, and a notable big-model state takes
   the info pair."""
+  if ui_state.params.get_bool("JetlinkEnabled"):
+    status = status_text()
+    active_prefix = "Active — "
+    active_name = status.removeprefix(active_prefix) if status.startswith(active_prefix) else model_info()[1]
+    return active_name, "Jetlink", status
   source, active_name, other_name = model_info()
   state = big_model_state()
   _, _, carry_display = carrying_model()
