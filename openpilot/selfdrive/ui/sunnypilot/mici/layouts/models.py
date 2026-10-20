@@ -28,7 +28,10 @@ def _model_info() -> tuple[str, str, str]:
   active line names what actually drives, and a notable big-model state takes
   the info pair."""
   if ui_state.params.get_bool("JetlinkEnabled"):
-    return "Jetlink Mac", "App model · V3 supported", status_text()
+    status = status_text()
+    active_prefix = "Active — "
+    active_name = status.removeprefix(active_prefix) if status.startswith(active_prefix) else model_info()[1]
+    return active_name, "Jetlink", status
   source, active_name, other_name = model_info()
   state = big_model_state()
   _, _, carry_display = carrying_model()
