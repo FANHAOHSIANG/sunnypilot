@@ -2,3 +2,6 @@
 	url = https://gitlab.com/sunnypilot/public/sunnypilot-new-lfs.git/info/lfs
 	pushurl = ssh://git@gitlab.com/sunnypilot/public/sunnypilot-new-lfs.git
 	locksverify = false
+	# Mac Jetlink runs the external driving model on the host. Keep the small
+	# native fallback and driver-monitoring assets; do not fetch Chestnut weights.
+	fetchexclude = openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx
