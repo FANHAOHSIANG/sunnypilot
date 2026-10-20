@@ -103,6 +103,7 @@ def main():
   count = check((ROOT / 'opendbc_repo/opendbc/safety/safety.h').read_text(),
                 (ROOT / 'panda/board/main.c').read_text())
   print(f'PASS: Panda/opendbc safety_tick interface ({count} arguments)')
+  subprocess.run([sys.executable, str(ROOT / 'tools/jetlink/check_panda_spi.py')], check=True)
   check_health((ROOT / 'panda/board/health.h').read_text(),
                (ROOT / 'openpilot/selfdrive/pandad/pandad.cc').read_text())
   print('This does not replace a full pandad build, firmware compilation or vehicle safety tests.')

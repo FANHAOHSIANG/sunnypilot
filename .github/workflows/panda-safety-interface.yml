@@ -5,6 +5,9 @@ on:
   pull_request:
     paths:
       - panda
+      - openpilot/selfdrive/pandad/spi.cc
+      - openpilot/selfdrive/pandad/panda_comms.h
+      - tools/jetlink/check_panda_spi.py
       - openpilot/selfdrive/pandad/pandad.cc
       - opendbc_repo
       - tools/jetlink/check_panda_compat.py
