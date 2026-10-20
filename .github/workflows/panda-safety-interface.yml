@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - panda
+      - openpilot/selfdrive/pandad/pandad.cc
       - opendbc_repo
       - tools/jetlink/check_panda_compat.py
       - .github/workflows/panda-safety-interface.yml

@@ -139,8 +139,18 @@ void fill_panda_state(cereal::PandaState::Builder &ps, cereal::PandaState::Panda
   ps.setInterruptLoad(health.interrupt_load_pkt / 255.0f);
   ps.setFanPower(health.fan_power);
   ps.setSafetyRxChecksInvalid((health.flags_pkt & HEALTH_FLAG_SAFETY_RX_CHECKS_INVALID) != 0U);
+  // Older HKG Panda firmware does not report these two reset flags.
+  // Preserve the schema defaults when unavailable; never reinterpret other bits.
+#ifdef HEALTH_FLAG_NMI_RESET
   ps.setNmiReset((health.flags_pkt & HEALTH_FLAG_NMI_RESET) != 0U);
+#else
+  ps.setNmiReset(false);
+#endif
+#ifdef HEALTH_FLAG_HARDFAULT_RESET
   ps.setHardfaultReset((health.flags_pkt & HEALTH_FLAG_HARDFAULT_RESET) != 0U);
+#else
+  ps.setHardfaultReset(false);
+#endif
   ps.setSpiErrorCount(health.spi_error_count_pkt);
   ps.setSbu1Voltage(health.sbu1_voltage_mV / 1000.0f);
   ps.setSbu2Voltage(health.sbu2_voltage_mV / 1000.0f);
