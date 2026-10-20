@@ -2,19 +2,23 @@
 
 本分支 `hkg-enhanced-jetlink` 直接建立在 TonyBinheWu/sunnypilot **hkg-enhanced**
 `d648262a015dfba1d8391d935c7fa93ea8214561`（2026-10-20）。
-Jetlink 移植自已建立的 `jetlink-tony-sp-v3` `53b0fb2`，不是把整個 master
-蓋到 HKG 上。Tony 的車輛修改、導航、UI 與固定依賴保留；本次沒有改車輛 CAN safety。
+另已完整合併官方 sunnypilot master `922513f3128b00611d695ce465989a9bc8af9d59`，
+目前 `COMMA_VERSION` 為 **0.11.3**。
+Jetlink 原始移植取自 `jetlink-tony-sp-v3` `53b0fb2`。
+本次官方合併保留 Tony 的 HKG torque 資料庫、導航、藍色路徑與停車標記。
+沒有改寫車輛 CAN safety 設定。
 
 **狀態：軟體整合／檢查通過，未完成 C4 啟動、QCOM、USB 或實際模型推論驗證。**
 
 ## 基底與依賴
 
 - HKG opendbc：`1c51731784729da5ebaf24b3c34106bd27aaf94b`，來源 TonyBinheWu/opendbc。
-- HKG tinygrad：`fe5d3169ba4f41d0947ad174925f413cbea9d056`。
-- 所有 gitlink 維持 HKG 原本的 commit；七個 submodule 只加 shallow clone 提示。
-- 配合這個 tinygrad 的 stream/out-of-band pickle API 調整 Warp 讀寫；不能混用
-  先前 master 基底所用的 path/persistent-buffer API。
-- 模型選擇器及其 catalog 版本沿用 HKG，不強制改成本分支以外的 runtime。
+- tinygrad 隨官方 0.11.3 更新為 `69fd4d34d4430036378aba2b43f9d339cdd6ea73`。
+- opendbc 保留 HKG torque 修改；其他依賴依官方合併結果更新。
+- Warp 讀寫同時辨識舊 HKG stream API 與新版 path/persistent-buffer API。
+- 新增 BSM 相容層：新版 UI 在舊 HKG 車輛資料庫上沿用其 enableBsm 判斷；
+  車輛資料庫提供新版 has_bsm 後直接使用它。
+- 模型選擇器隨官方升至 selector 21、Chestnut catalog v28。
 
 ## 使用 Jetlink
 
@@ -73,8 +77,8 @@ CommaView 真實串流及與 Jetlink 同時運行仍待 C4 驗證。
 
 `.github/workflows/hkg-jetlink-upstream-sync.yml` 每日 03:33 UTC（台灣 11:33）
 檢查 Tony **hkg-enhanced**，合併至獨立 sync 分支，通過檢查後開 PR。
-不另把官方 master 自動蓋入 HKG；官方整合由 Tony 的 HKG 基底帶入，保留其
-車輛相容性與固定依賴。發生衝突或檢查失敗會停止，不更新已安裝 C4。
+同時合併官方 master；依賴或功能衝突會停止並需要人工處理。
+這只建立更新 PR，不會自動合併，也不會更新已安裝 C4。
 排程需相同 workflow 在 default master；首個排程執行及 Actions 建 PR 權限待確認。
 
 ## 本次驗證與限制
@@ -85,8 +89,9 @@ CommaView 真實串流及與 Jetlink 同時運行仍待 C4 驗證。
 - Registry 48 項離線測試通過。
 - CommaView 13 個官方輔助檔 SHA256、來源分類正／反向檢查、C4 UI transformer
   與 exporter smoke check 通過；沒有在工作環境執行實際 ARM64 installer。
-- HKG 原有控制、車輛程式與 gitlink 比對保持原值；未在此環境重跑全部 HKG
-  車輛測試或完整 AGNOS 編譯。先前 99%／逗號畫面問題仍需要裝置日誌才能判定。
+- HKG opendbc torque 與導航、藍色路徑、停車標記保留；藍色路徑及翻譯 16 項、
+  真實 HKG CarParams 盲點相容性 2 項檢查通過。完整 HKG 車輛測試與 AGNOS
+  編譯未完成。先前 99%／逗號畫面及實際 Jetlink 未連線仍需要裝置日誌。
 - `.lfsconfig` 略過 Mac 模式不用的 Chestnut 大模型權重；保留本機小模型與監控。
   新 HKG 基底的完整 LFS clone 尚未測試；不能沿用舊基底下載總量當作本次數字。
 - 原有 `c4-install` 入口仍指向舊 `jetlink-mac-experimental`，沒有更換。

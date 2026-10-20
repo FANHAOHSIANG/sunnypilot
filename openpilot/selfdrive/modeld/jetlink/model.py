@@ -10,7 +10,7 @@ from openpilot.selfdrive.modeld.jetlink.link import ClientConnection, SPEC, FAUL
 from openpilot.selfdrive.modeld.jetlink.prepare import WarpPreparation
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
-from openpilot.selfdrive.modeld.jetlink.artifact import load_prepared, save_prepared
+from openpilot.selfdrive.modeld.jetlink.artifact import load_prepared, save_prepared, stream_abi
 
 from openpilot.common.jetlink_status import MODEL_STATUS
 
@@ -37,6 +37,9 @@ class Warp:
     if prepared is not None:
       inputs_ready = time.monotonic()
       value = load_prepared(prepared)
+      if not stream_abi():
+        from tinygrad.engine.realize import lower_and_compile
+        value['warp'].captured._linear = lower_and_compile(value['warp'].captured._linear)
       if value['identity'] != (width, height, self.size, SPEC.sha256):
         raise ValueError('prepared Jetlink warp contract mismatch')
       self.run_warp = value['warp']
