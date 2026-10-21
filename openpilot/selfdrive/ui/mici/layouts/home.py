@@ -223,6 +223,7 @@ class MiciHomeLayout(Widget):
     usb_connected = ui_state.usb_connected
     usb_unknown = ui_state.usb_unknown
     chestnut_state = ui_state.chestnut_state
+    usb_unknown = usb_unknown and not (ui_state.jetlink_enabled and chestnut_state != ChestnutState.DISCONNECTED)
     if gui_app.sunnypilot_ui():
       self._set_chestnut_visibility()
     else:

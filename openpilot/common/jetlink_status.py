@@ -62,6 +62,53 @@ def proving_active():
   return bool(read_status(MODEL_STATUS).get('proving'))
 
 
+def display_state(sm, onroad, now=None, model=None, link=None):
+  """Display state only; never pretend Jetlink is a physical Chestnut."""
+  now = time.monotonic() if now is None else now
+  model = read_status(MODEL_STATUS, now=now) if model is None else model
+  link = read_status(now=now) if link is None else link
+  if fault_active() or model.get('phase') in ('local_failed', 'prepare_failed'):
+    return 'failed'
+  if model.get('phase') == 'preparing' or model.get('proving'):
+    return 'loading'
+  if link.get('state') == 'ready':
+    if (onroad and model.get('active') and model.get('state') == 'active'
+        and isinstance(model.get('sha256'), str) and len(model['sha256']) == 64
+        and model.get('sha256') == link.get('sha256') and sm.seen['modelV2']
+        and sm.alive['modelV2'] and sm.valid['modelV2'] and sm['modelV2'].big
+        and 0 <= now - sm.recv_time['modelV2'] < .2):
+      return 'active'
+    return 'ready'
+  if link.get('state') == 'connecting':
+    return 'loading'
+  if link.get('state') in ('blocked', 'unsupported', 'retrying'):
+    return 'failed'
+  return 'disconnected'
+
+
+class ReadyNotice:
+  """One notification per proven model admission; gaps never rearm it."""
+  def __init__(self):
+    self.announced = None
+
+  def update(self, sm, enabled, now=None):
+    if not enabled:
+      self.announced = None
+      return False
+    now = time.monotonic() if now is None else now
+    model = read_status(MODEL_STATUS, now=now)
+    if display_state(sm, True, now=now, model=model) != 'active':
+      return False
+    stamp = model.get('handover_at', 0.)
+    if not isinstance(stamp, (int, float)) or not math.isfinite(stamp) or not 0 < stamp <= now:
+      return False
+    identity = (model['sha256'], stamp)
+    if identity == self.announced:
+      return False
+    self.announced = identity
+    return True
+
+
 def fallback_active(now=None, model=None):
   now = time.monotonic() if now is None else now
   model = read_status(MODEL_STATUS, now=now) if model is None else model

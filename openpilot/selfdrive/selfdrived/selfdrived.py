@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from openpilot.common.jetlink_status import fault_active as jetlink_fault_active, proving_active as jetlink_proving_active, fallback_active as jetlink_fallback_active
-from openpilot.common.jetlink_status import HandoverGuard
+from openpilot.common.jetlink_status import HandoverGuard, ReadyNotice
 import os
 import time
 import threading
@@ -88,6 +88,7 @@ class SelfdriveD:
     self.big_model_failed = False
     self.big_model_ready_t = 0.
     self.jetlink_handover = HandoverGuard()
+    self.jetlink_ready_notice = ReadyNotice()
 
     # Setup sockets
     self.pm = messaging.PubMaster(['selfdriveState', 'onroadEvents'] + ['selfdriveStateSP', 'onroadEventsSP'])
@@ -194,11 +195,14 @@ class SelfdriveD:
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
+    jetlink_enabled = self.params.get_bool("JetlinkEnabled")
     loading = self.params.get_bool("ChestnutLoading")
-    if self.big_model_loading and not loading:
+    if self.big_model_loading and not loading and not jetlink_enabled:
       self.big_model_ready_t = time.monotonic()
       self.events_sp.add(custom.OnroadEventSP.EventName.bigModelReady)
     self.big_model_loading = loading
+    if self.jetlink_ready_notice.update(self.sm, jetlink_enabled):
+      self.events_sp.add(custom.OnroadEventSP.EventName.bigModelReady)
     if jetlink_fallback_active():
       self.events_sp.add(custom.OnroadEventSP.EventName.jetlinkFallback)
 

@@ -6,6 +6,7 @@ from enum import Enum
 from openpilot.cereal import messaging, log
 from opendbc.car.structs import car
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.jetlink_status import display_state as jetlink_display_state
 from openpilot.common.params import Params
 from openpilot.common.realtime import drop_realtime
 from openpilot.common.swaglog import cloudlog
@@ -108,6 +109,7 @@ class UIState(UIStateSP):
     self.usb_disconnected_ts: float | None = None
     self.usb_unknown: bool = False
     self.chestnut_state = ChestnutState.DISCONNECTED
+    self.jetlink_enabled = self.params.get_bool("JetlinkEnabled")
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -225,6 +227,9 @@ class UIState(UIStateSP):
       self._started_prev = self.started
 
   def _update_chestnut_state(self) -> None:
+    if self.jetlink_enabled:
+      self.chestnut_state = ChestnutState(jetlink_display_state(self.sm, self.started))
+      return
     detected = self.sm["deviceState"].chestnutPresent
     if not self.started:
       self.chestnut_present = detected
@@ -270,6 +275,7 @@ class UIState(UIStateSP):
     self.nav_destination_set = self.params.get("NavDestination") is not None
     self.chestnut_active = self.params.get("ChestnutActive")
     self.chestnut_loading = self.params.get_bool("ChestnutLoading")
+    self.jetlink_enabled = self.params.get_bool("JetlinkEnabled")
     self.chestnut_alert = any(self.params.get(k) is not None for k, a in OFFROAD_ALERTS.items() if k.startswith("Offroad_Chestnut") and a["severity"] >= 0)
     now = time.monotonic()
     if cable_connected():

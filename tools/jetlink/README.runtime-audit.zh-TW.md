@@ -143,3 +143,20 @@ allocation 與 recurrent output/JIT 對狀態的 alias；不換張量、不忽�
 非歷史輸入保持不變、同幀接手，以及複製失敗仍觸發 fatal fault。
 新增 recovery_error 與 local_failed phase，區分遠端失敗和本機恢復失敗。
 這些是 NPY/主機測試，不能代替 QCOM 直接記憶體存取與實車時序驗證。
+
+## C4 Jetlink 圖示與完成通知
+
+原本圖示只依實體 Chestnut 判斷，Big Model Ready 也只由 ChestnutLoading
+下降觸發。Jetlink 使用 stock modeld，這兩條路徑沒有反映遠端模型狀態。
+現在以 Jetlink 新鮮連線／模型紀錄，以及有效存活、200 ms 內的 modelV2.big
+顯示狀態，不修改 chestnutPresent、ChestnutActive 或任何實體硬體參數。
+
+C4 行車 HUD：連線就緒但未採用為白色；準備／proving 為白色閃動；
+模型身分相符、active 且 proving 完成才顯示綠色；故障橙色。Jetlink 啟用時
+行車圖示持續可見，不套用原生圖示數秒後淡出的規則；斷線仍不畫啟用圖示。
+主頁保留原有連線圖示含義，已辨識 Jetlink 時不被 Chestnut 的 unknown USB
+判斷隱藏；主頁連線就緒不代表模型正在駕駛。
+
+Big Model Ready 僅在實際採用且完成 proving 後每次換入通知一次。狀態檔短暫
+消失／過期不重複通知；daemon ready、offroad 暖機、失敗或模型仍在 proving
+都不觸發。原有巡航、MADS gate 與推論切換邏輯沒有更動。

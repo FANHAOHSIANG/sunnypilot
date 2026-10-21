@@ -17,6 +17,9 @@ on:
       - openpilot/sunnypilot/selfdrive/car/tests/test_dynamics_compat.py
       - openpilot/selfdrive/ui/sunnypilot/**/models.py
       - openpilot/selfdrive/ui/mici/onroad/model_renderer.py
+      - openpilot/selfdrive/ui/mici/onroad/hud_renderer.py
+      - openpilot/selfdrive/ui/ui_state.py
+      - openpilot/selfdrive/ui/mici/layouts/home.py
       - openpilot/selfdrive/ui/sunnypilot/onroad/predicted_stop_marker.py
       - openpilot/selfdrive/ui/tests/test_c4_renderer.py
       - openpilot/selfdrive/ui/tests/test_blue_path.py
@@ -46,5 +49,5 @@ jobs:
       - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
       - run: PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
       - run: PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
-      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot openpilot/selfdrive/modeld/modeld.py openpilot/selfdrive/selfdrived/selfdrived.py openpilot/sunnypilot/selfdrive/selfdrived/events.py openpilot/common/jetlink_status.py
+      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot openpilot/selfdrive/ui/ui_state.py openpilot/selfdrive/ui/mici openpilot/selfdrive/modeld/modeld.py openpilot/selfdrive/selfdrived/selfdrived.py openpilot/sunnypilot/selfdrive/selfdrived/events.py openpilot/common/jetlink_status.py
 

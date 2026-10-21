@@ -23,6 +23,7 @@ class MiciHomeLayoutSP(MiciHomeLayout):
     usb_connected = ui_state.usb_connected
     usb_unknown = ui_state.usb_unknown
     chestnut_state = ui_state.chestnut_state
+    usb_unknown = usb_unknown and not (ui_state.jetlink_enabled and chestnut_state != ChestnutState.DISCONNECTED)
     loading = chestnut_state == ChestnutState.LOADING
 
     self._usb_icon.set_visible(usb_connected and usb_unknown)
