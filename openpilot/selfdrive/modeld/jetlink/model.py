@@ -8,7 +8,6 @@ import numpy as np
 
 from openpilot.selfdrive.modeld.jetlink.link import AsyncClient, ClientConnection, SPEC, FAULT, state
 from openpilot.selfdrive.modeld.jetlink.recovery import Recovery, HOLD_FRAME, DROP_LIMIT
-from openpilot.selfdrive.modeld.jetlink.prepare import WarpPreparation
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
 from openpilot.selfdrive.modeld.jetlink.artifact import load_prepared, save_prepared, stream_abi
@@ -57,7 +56,7 @@ class Warp:
       return
     from tinygrad import Tensor, TinyJit
     # The C4 launcher symlinks tinygrad, but not its examples package.
-    # This import runs only in the isolated offroad preparation subprocess.
+    # Import/compile before modeld enters its live frame loop.
     import sys
     tinygrad_root = str(Path(__file__).resolve().parents[4] / 'tinygrad_repo')
     if tinygrad_root not in sys.path:
@@ -110,7 +109,8 @@ class Warp:
 class JoiningModel:
   """Leave all control and message publication in sunnypilot's stock modeld.
 
-  Warp preparation requires standstill. Admission requires all controls off.
+  Warp preparation finishes before the live frame loop, on modeld's thread.
+  Admission requires all controls off.
   A failed remote session returns a validated local result on the same frame.
   Only failed local recovery latches commIssue; a remote rejoin still proves
   its first 20 frames with engagement blocked.
@@ -120,20 +120,22 @@ class JoiningModel:
     self.small = small
     self.warp_size = (width, height)
     self.warp_inputs = make_warp_inputs()
-    self.warp = self.preparation = self.connection = self.client = None
+    self.warp = self.connection = self.client = None
     self.parser = Parser()
     self.active = self.ready = self.join_allowed = False
     self.small_runs = 0
     self.recovery = Recovery()
     self.last_output = None
     self.last_output_at = 0.
-    self.prepare_allowed = False
     self.frame_drop_ratio = 0.
     self.handovers = 0
     self.next_join = self.next_status = 0.
     self.error = ''
     self.fallback_until = 0.
     self.fallback_count = 0
+    self.handover_at = 0.
+    self.prepare_error = ''
+    self.inference_ms = 0.
     self.frame = 0
     self.reset = True
     self.spec = SPEC
@@ -141,6 +143,49 @@ class JoiningModel:
     self.views = {name: a.reshape(shape) for (name, shape), a in zip(
       SPEC.packed_shapes.items(), np.split(self.packed, np.cumsum(SPEC.packed_sizes[:-1])), strict=True)}
     self.prev_desire = np.zeros(8, np.float32)
+
+  def prepare(self):
+    """Never compile or warm a second QCOM program beside live inference."""
+    from openpilot.common.swaglog import cloudlog
+    self._publish_status(phase='preparing')
+    try:
+      self.warp = Warp(*self.warp_size, input_buffers=self.warp_inputs)
+    except Exception as exc:
+      self.prepare_error = str(exc)
+      self.error = 'Jetlink camera preparation failed; restart to retry: ' + str(exc)
+      cloudlog.exception('Jetlink camera adapter unavailable; retaining local model')
+    self._publish_status()
+    return self
+
+  def _phase(self):
+    if self.prepare_error:
+      return 'prepare_failed'
+    if self.warp is None:
+      return 'not_prepared'
+    if self.recovery.proving:
+      return 'proving'
+    if self.active:
+      return 'active'
+    if not self.ready:
+      return 'waiting_link'
+    if not self.join_allowed:
+      return 'waiting_controls'
+    if self.small_runs < 3:
+      return 'warming_local'
+    return 'retry_backoff' if time.monotonic() < self.next_join else 'connecting'
+
+  def _publish_status(self, phase=None):
+    now = time.monotonic()
+    tmp = MODEL_STATUS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(dict(updated=now, state='active' if self.active else 'local',
+                                  active=self.active, ready=self.ready, error=self.error,
+                                  phase=phase or self._phase(), handover_at=self.handover_at,
+                                  inference_ms=self.inference_ms,
+                                  failures=self.recovery.failures, held=self.recovery.consecutive,
+                                  fallback_until=self.fallback_until, fallback_count=self.fallback_count,
+                                  proving=self.recovery.proving, model=model_name(self.spec), sha256=self.spec.sha256)))
+    os.replace(tmp, MODEL_STATUS)
+    self.next_status = now + 1
 
   @property
   def lat_smooth_seconds(self):
@@ -152,8 +197,6 @@ class JoiningModel:
     required = ('carState', 'selfdriveState', 'carControl', 'carControlSP')
     self.join_allowed = may_join(now, {k: sm[k] for k in required},
                                 {k: sm.valid[k] and sm.alive[k] for k in required}, sm.recv_time)
-    cs = sm['carState']
-    self.prepare_allowed = self.join_allowed and cs.standstill and abs(cs.vEgo) < .01
     if self.join_allowed and self.small_runs >= 3 and not self.recovery.proving:
       FAULT.unlink(missing_ok=True)
     self.ready = state().get('state') == 'ready'
@@ -161,23 +204,12 @@ class JoiningModel:
       self.connection.close()
       self.connection = None
     if now >= self.next_status:
-      tmp = MODEL_STATUS.with_suffix('.tmp')
-      tmp.write_text(json.dumps(dict(state='active' if self.active else 'local', active=self.active, proving=self.recovery.proving,
-                                     failures=self.recovery.failures, held=self.recovery.consecutive, ready=self.ready, error=self.error,
-                                     fallback_until=self.fallback_until, fallback_count=self.fallback_count, model=model_name(self.spec),
-                                     sha256=self.spec.sha256, updated=now)))
-      os.replace(tmp, MODEL_STATUS)
-      self.next_status = now + 1
+      self._publish_status()
 
   def _write_proving(self):
     # Publish the no-entry gate before the first remote inference. Failure to
     # publish aborts admission rather than allowing an unproven model.
-    tmp = MODEL_STATUS.with_suffix('.tmp')
-    tmp.write_text(json.dumps(dict(updated=time.monotonic(), state='active' if self.active else 'local',
-                                  active=self.active, ready=self.ready, error=self.error,
-                                  fallback_until=self.fallback_until, fallback_count=self.fallback_count,
-                                  proving=self.recovery.proving, sha256=self.spec.sha256)))
-    os.replace(tmp, MODEL_STATUS)
+    self._publish_status()
     self.next_status = 0
 
   def _remember(self, result):
@@ -197,24 +229,6 @@ class JoiningModel:
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     from openpilot.common.swaglog import cloudlog
     frame_smoothing = self.lat_smooth_seconds
-    if self.preparation is not None and not self.ready:
-      self.preparation.close()
-      self.preparation = None
-    if self.warp is None and self.small_runs >= 3 and self.ready and self.prepare_allowed and time.monotonic() >= self.next_join:
-      try:
-        if self.preparation is None:
-          self.preparation = WarpPreparation(*self.warp_size)
-        if self.preparation.future.done():
-          prepared, _ = self.preparation.future.result()
-          self.warp = Warp(*self.warp_size, prepared=prepared, input_buffers=self.warp_inputs)
-          self.preparation = None
-      except Exception as exc:
-        cloudlog.exception('Jetlink camera adapter unavailable; retaining local model')
-        if self.preparation is not None:
-          self.preparation.close()
-          self.preparation = None
-        self.error = str(exc)
-        self.next_join = time.monotonic() + 30
     if self.warp is not None and self.small_runs >= 3 and self.client is None and self.ready and self.join_allowed and time.monotonic() >= self.next_join:
       try:
         if self.connection is None:
@@ -283,11 +297,15 @@ class JoiningModel:
         if not held and 'prev_feat' in self.views:
           self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
         self.reset = False
+        self.inference_ms = (time.monotonic() - started) * 1000.
         if not self.active:
           cloudlog.warning('Jetlink active: %s %s', model_name(self.spec), self.spec.sha256)
           self.error = ''
           self.next_status = 0
+          self.handover_at = time.monotonic()
         self.active = True
+        if self.next_status == 0:
+          self._publish_status()
         if os.getenv('SEND_RAW_PRED'):
           outputs['raw_pred'] = result.copy()
         return outputs
@@ -319,6 +337,7 @@ class JoiningModel:
         # The normal CAN, process, model freshness and localization checks
         # remain authoritative and can still disengage independently.
         self.fallback_count += 1
+        self.handover_at = time.monotonic()
         self.fallback_until = time.monotonic() + 5.
         self._write_proving()
         cloudlog.warning('Jetlink fallback: small model recovered on this frame')

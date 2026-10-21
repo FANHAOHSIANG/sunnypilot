@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from openpilot.common.jetlink_status import fault_active as jetlink_fault_active, proving_active as jetlink_proving_active, fallback_active as jetlink_fallback_active
+from openpilot.common.jetlink_status import HandoverGuard
 import os
 import time
 import threading
@@ -86,6 +87,7 @@ class SelfdriveD:
     self.big_model_active = False
     self.big_model_failed = False
     self.big_model_ready_t = 0.
+    self.jetlink_handover = HandoverGuard()
 
     # Setup sockets
     self.pm = messaging.PubMaster(['selfdriveState', 'onroadEvents'] + ['selfdriveStateSP', 'onroadEventsSP'])
@@ -439,7 +441,8 @@ class SelfdriveD:
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
     warmup_sec = 5.
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
-    if not self.sm.all_checks() and no_system_errors and not big_model_settling:  # the load holds modelV2 and friends back on purpose
+    jetlink_settling = self.jetlink_handover.update(self.sm)
+    if not self.sm.all_checks() and no_system_errors and not big_model_settling and not jetlink_settling:
       if not self.sm.all_alive():
         self.events.add(EventName.commIssue)
       elif not self.sm.all_freq_ok():
@@ -460,7 +463,7 @@ class SelfdriveD:
 
     if not self.CP.notCar and not big_model_settling:  # localization has nothing to work with during the load
       # the defaults of a message that was never received are not a localizer failure
-      if self.sm.seen['deviceMotion'] and not self.sm['deviceMotion'].posenetOK:
+      if self.sm.seen['deviceMotion'] and not self.sm['deviceMotion'].posenetOK and not jetlink_settling:
         self.events.add(EventName.posenetInvalid)
       if self.sm.seen['deviceMotion'] and not self.sm['deviceMotion'].inputsOK:
         self.events.add(EventName.locationdTemporaryError)
@@ -512,7 +515,7 @@ class SelfdriveD:
 
     # TODO: fix simulator
     if not SIMULATION or REPLAY:
-      if self.sm['modelV2'].frameDropPerc > 1 and not big_model_settling:
+      if self.sm['modelV2'].frameDropPerc > 1 and not big_model_settling and not jetlink_settling:
         self.events.add(EventName.modeldLagging)
 
     # mute canBusMissing event if in Park, as it sometimes may trigger a false alarm with MADS in Paused state

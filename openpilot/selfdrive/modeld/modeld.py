@@ -308,7 +308,7 @@ def main(demo=False):
     if COMMA_HARDWARE:
       try:
         from openpilot.selfdrive.modeld.jetlink.model import JoiningModel
-        jetlink_model = JoiningModel(model, vipc_client_main.width, vipc_client_main.height)
+        jetlink_model = JoiningModel(model, vipc_client_main.width, vipc_client_main.height).prepare()
       except Exception:
         cloudlog.exception("Jetlink adapter unavailable; retaining native model")
 

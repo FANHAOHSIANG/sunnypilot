@@ -193,14 +193,47 @@ class ModelRecoveryTests(unittest.TestCase):
       self.assertIn('plan', a.run({}, {}, self.inputs))
     self.assertTrue(a.recovery.proving)
 
-  def test_warp_first_preparation_never_runs_while_moving(self):
+  def test_live_loop_never_prepares_a_missing_warp(self):
     a = self.adapter
     a.ready = a.join_allowed = True
-    a.prepare_allowed = False
     a.small_runs = 3
-    with patch.object(model, 'WarpPreparation') as prep:
+    with patch.object(model, 'Warp') as prep:
       self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
       prep.assert_not_called()
+
+  def test_prepare_is_synchronous_without_remote_or_control_state(self):
+    a = self.adapter
+    with patch.object(model, 'Warp') as warp:
+      self.assertIs(a.prepare(), a)
+      self.assertIs(a.warp, warp.return_value)
+      warp.assert_called_once_with(1928, 1208, input_buffers=a.warp_inputs)
+    self.assertEqual(json.loads(self.status.read_text())['phase'], 'waiting_link')
+    self.local.run.assert_not_called()
+
+  def test_failed_preparation_stays_local_and_does_not_retry_in_frame_loop(self):
+    a = self.adapter
+    with patch.object(model, 'Warp', side_effect=RuntimeError('compiler failed')) as warp:
+      a.prepare()
+      a.ready = a.join_allowed = True
+      for _ in range(5):
+        self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
+      self.assertEqual(warp.call_count, 1)
+    self.assertEqual(json.loads(self.status.read_text())['phase'], 'prepare_failed')
+    self.assertFalse(self.fault.exists())
+
+  def test_successful_swap_sets_timestamp_once_not_on_each_frame(self):
+    a = self.remote()
+    a.run({}, {}, self.inputs)
+    stamp = a.handover_at
+    self.assertGreater(stamp, 0.)
+    a.run({}, {}, self.inputs)
+    self.assertEqual(a.handover_at, stamp)
+    self.assertEqual(json.loads(self.status.read_text())['handover_at'], stamp)
+
+  def test_preparation_precedes_realtime_and_live_loop_in_modeld(self):
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[2] / 'modeld.py').read_text()
+    self.assertLess(source.index('height).prepare()'), source.index('config_realtime_process(7, 54)'))
 
 
 if __name__ == '__main__':

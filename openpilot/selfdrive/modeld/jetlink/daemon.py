@@ -21,7 +21,7 @@ from openpilot.selfdrive.modeld.jetlink.link import SOCKET, SPEC, REQUEST, REPLY
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, validate_model_spec
 from jetlink.client import JetlinkClient
 from jetlink.transport.ffs import FfsTransport
-from openpilot.selfdrive.modeld.jetlink.cable import accept_phone, PersistentIOSGadget
+from openpilot.selfdrive.modeld.jetlink.cable import accept_phone, PersistentIOSGadget, wait_retry
 
 GADGET = '/sys/kernel/config/usb_gadget/jetlink'
 USB_DATA_ROLE = Path('/sys/class/usbpd/usbpd0/current_dr')
@@ -301,7 +301,7 @@ def main():
         except Exception as exc:
           blocked = str(exc)[:300]
           publish('blocked', error=blocked)
-      time.sleep(2)
+      wait_retry(host_attached)
   finally:
     if ios_gadget.owner is not None:
       cleanup(ios_gadget.owner)

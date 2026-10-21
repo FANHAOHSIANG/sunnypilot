@@ -10,6 +10,19 @@ ADDRESS = "192.168.60.1"
 PORT = 5599
 NETWORK = ipaddress.ip_network("192.168.60.0/24")
 
+
+def wait_retry(present, delay=2., clock=time.monotonic, pause=time.sleep):
+  """Keep ordinary retry pacing, but notice a physical replug every 250 ms."""
+  deadline = clock() + delay
+  detached = not present()
+  while clock() < deadline:
+    pause(min(.25, max(0., deadline - clock())))
+    attached = present()
+    if detached and attached:
+      return
+    detached |= not attached
+
+
 def cable_peer(local, peer):
   try:
     address = ipaddress.ip_address(peer[0])

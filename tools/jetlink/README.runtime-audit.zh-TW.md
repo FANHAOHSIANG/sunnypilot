@@ -1,14 +1,15 @@
 # Mac 上路故障：與 zoompilot 的來源比對
 
-比對 zoompilot/zoompilot 204f529566660e83d25599e0f5870deaa5cc23ca 的
-jetlink_repo/jetlink/openpilot/joining.py 與 sunnypilot/jetlink_adapter。
+本次重新比對 zoompilot/zoompilot 632b0b0bebd608cb4846c00cec8c9522eac514f2 的
+Adapter，以及該版實際釘選的 jetlink_repo b1d704188758536e573108162d0f84c316b427d9
+之 joining.py / events.py / owner.py；不是只比對 Jetlink main 分支。
 使用者回報 big model ready 後 Cruise Fault，以及重新啟動後 paramsd process not running；
 尚未取得該次行車的 traceback / qlog，不能把所有故障認定為同一原因。
 
 | 項目 | 原本本分支 | 本次修正與限制 |
 | --- | --- | --- |
 | ready | daemon 的模型、連線與暖機就緒 | 不代表 modeld 已採用遠端輸出；Active 才是實際使用 |
-| 換入大模型 | 需要停止且控制未啟用 | 現在要求新鮮有效的 carState/selfdriveState/carControl/carControlSP，巡航與 MADS 全部關閉；可在移動中重接已準備的 warp。首次 GPU warp 準備仍只在停車時執行 |
+| 換入大模型 | 需要停止且控制未啟用 | 要求新鮮有效的 carState/selfdriveState/carControl/carControlSP，巡航與 MADS 全部關閉；可在移動中重接已準備的 warp。GPU warp 在 modeld 即時迴圈開始前，同一執行緒完成編譯及三次暖機 |
 | 遠端推論失敗 | 失敗當幀回傳 None | 同幀執行暖機過的本機模型；不隱藏本機推論錯誤 |
 | 短暫延遲 | 同步等待至 IPC 逾時 | 一次最多一個背景 IPC；正常幀總預算 46 ms，遲到時有限度沿用上一份輸出，不排隊累積相機幀。第一次無輸出可保留時維持原有 150 ms 上限 |
 | 延遲上限 | 無保留幀規則 | 連續 5 次或 10 秒內超過 20 次保留、輸出來源超過 200 ms、相機 frame_drop_ratio > 0.0075 時回退。不重用非有限或身分不符的輸出 |
@@ -16,8 +17,8 @@ jetlink_repo/jetlink/openpilot/joining.py 與 sunnypilot/jetlink_adapter。
 | 重試 | 固定 5 秒 | 前三次失敗各等 1 秒，之後 5/10/20/40/60 秒，上限 60 秒；成功持續超過 60 秒重設失敗次數。時間到仍須控制全關及本機完成三幀暖機 |
 | 故障警示 | 任何遠端失敗都鎖存 commIssue | 小模型同幀成功接手時僅提示，不額外解除控制；只有本機恢復失敗才鎖存 fault。真正的 ACC/CAN/定位/程序故障依舊生效 |
 
-來源：zoompilot/jetlink d24328d849b0e5154b55f149dc18c5dfe8bd79cc 的
-joining.py / model_state.py（MIT），以及 zoompilot/zoompilot 204f5295 的 Adapter.in_control。
+來源：早期移植為 zoompilot/jetlink d24328d 的 joining.py / model_state.py（MIT）；
+本次以開頭的實際釘選 b1d7041 複核準備順序與有時限交接邏輯。
 這是符合本分支 IPC 與 stock modeld 的移植，不是直接替換整套 zoompilot adapter。
 USB 引擎仍存活時可重試；整個 USB 斷線後也允許在行駛中背景重連，
 前提是有效且新鮮的硬體與車況訊息。不修改 IsOffroad 或線束點火訊號。
@@ -78,9 +79,11 @@ carControl/carControlSP 有效新鮮（0.25 秒內），且車速為有限值。
 
 modeld 的 may_join 與 20 幀 proving 完全保留：巡航或 MADS 啟用時不得
 換入大模型。大模型已運行後可以繼續巡航，點火訊號不會主動斷開它。
-首次 QCOM warp 準備仍只在停止且解除控制時進行；若 C4 在行駛中重啟，
-USB 可先恢復 ready，初次 GPU 準備仍需等安全停妥。這不是行駛中無縫
-熱切換，也不會在重新連線後自動替駕駛重新啟用巡航。
+QCOM warp 不再於行車推論旁啟動另一個 GPU 編譯程序，而是在 modeld 啟動、
+設定即時優先權及進入相機迴圈前準備。不依賴手機先連好，準備失敗仍使用
+本機模型並記錄 prepare_failed，該次行車不再嘗試編譯；需重新啟動才能重試。
+初次編譯可能增加 modeld 啟動時間，尚未量測 C4 QCOM 實機耗時。
+重新連線不會自動替駕駛重新啟用巡航。
 
 ## 遠端失效時不中斷接手的程式路徑
 
@@ -92,8 +95,13 @@ USB 可先恢復 ready，初次 GPU 準備仍需等安全停妥。這不是行�
 
 小模型重設失敗、推論例外、空輸出或非有限輸出仍寫入 fatal fault 並拋出；
 既有程序存活、訊息時效與頻率、ACC、CAN、Panda、安全及定位檢查沒有移除。
-沒有整段忽略通訊／定位事件的 settling 豁免；因此這些檢查真的失敗時仍會退出，
-不能宣稱任何 USB 故障都能無縫保持巡航。
+本次新增最多一秒的交接緩衝，僅在已取得有效模型輸出的真實切換後生效，
+時間從 handover_at 計算，不因狀態更新延長。交接前姿態與定位參數須健康；
+交接中訊息存活、有效性、非模型服務檢查及 modelV2 200 ms 新鮮度仍須通過。
+只容許模型衍生服務頻率、posenetOK 與 modeldLagging 的交接短暫波動。
+inputsOK=False、vehicleParameters.valid=False、程序退出、CAN/ACC/Panda 和
+本機 fatal fault 不受此緩衝豁免；持續姿態／頻率異常超過一秒立即回到原檢查。
+這比 zoompilot 對整個通訊／定位區塊的 settling 處理嚴格，並非完全相同的 adapter。
 
 依 zoompilot 的 handed_over 重啟現有 10 幀 camera-drop warm-up，僅容忍
 實際模型交接造成的相機幀落後；服務存活、頻率與定位檢查仍保留。
@@ -105,3 +113,17 @@ V3 換回小模型時同步調整當幀的 lateral action delay，避免沿用 V
 同時存在時仍觸發原有退出機制。另驗證 Cap'n Proto 新事件序列化、同幀輸出、
 空／壞本機輸出、重設例外、後續本機崩潰、提示時效及 V3 時間參數。
 沒有 C4/QCOM 或實車故障注入驗證，不建議在道路上刻意拔線測試。
+
+## 連線與可觀測性
+
+iOS 持續保留 NCM gadget，session 重試只關閉 TCP，避免 AGNOS 4.9 重建 NCM。
+一般失敗仍等待兩秒；其間每 250 ms 觀察實體主機拔插，偵測重新接上即可提前重試。
+Mac 仍使用本分支既有 SafeTransport cleanup，尚未換成 zoompilot 跨程序 Owner lease。
+iOS 每幀模型身分缺省時仍保留 STATE 查詢，沒有為降低延遲移除身分驗證。
+
+model status 新增 phase、handover_at、inference_ms。phase 區分準備中／失敗、
+等待連線、等待解除巡航與 MADS、暖機、退避、連接及 proving。
+inference_ms 是 modeld 的遠端路徑本幀處理時間（含 warp 與 IPC 等待），
+沿用保留幀時不是新遠端結果的全程延遲，不能直接等同 App 引擎耗時。
+daemon ready 但 model status 缺少或過期時顯示 live modeld status unavailable，
+offroad 時 modeld 本來就不執行；ready 不是 active 的證據。
