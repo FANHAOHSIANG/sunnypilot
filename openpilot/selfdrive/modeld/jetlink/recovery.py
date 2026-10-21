@@ -38,9 +38,12 @@ class Recovery:
     self.holds.append(now)
     while self.holds and now - self.holds[0] > 10.:
       self.holds.popleft()
-    if (SETTLING_FRAMES < self.frames <= PROVING_FRAMES or
-        self.consecutive >= 5 or len(self.holds) > 20):
-      raise TimeoutError('Jetlink fell behind')
+    if SETTLING_FRAMES < self.frames <= PROVING_FRAMES:
+      raise TimeoutError(f'Jetlink fell behind: held proving frame {self.frames}/{PROVING_FRAMES}')
+    if self.consecutive >= 5:
+      raise TimeoutError(f'Jetlink fell behind: held {self.consecutive} frames in a row')
+    if len(self.holds) > 20:
+      raise TimeoutError(f'Jetlink fell behind: held {len(self.holds)} frames in 10 seconds')
 
   def failed(self, now):
     stable = self.joined_at is not None and now - self.joined_at > 60.

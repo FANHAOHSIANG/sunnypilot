@@ -160,3 +160,22 @@ C4 行車 HUD：連線就緒但未採用為白色；準備／proving 為白色�
 Big Model Ready 僅在實際採用且完成 proving 後每次換入通知一次。狀態檔短暫
 消失／過期不重複通知；daemon ready、offroad 暖機、失敗或模型仍在 proving
 都不觸發。原有巡航、MADS gate 與推論切換邏輯沒有更動。
+
+## 反覆 proving 失敗的排程與診斷
+
+遠端 ready、fallback_count 持續增加且 recovery_error 為空，代表小模型正常
+接手，但遠端無法通過證明期，不能解讀成大模型已穩定駕駛。
+發現本分支 IPC worker／連接執行緒先前僅設 SCHED_OTHER，仍繼承 modeld
+core 7 的 affinity。改用 zoompilot 相同的 transport.priority.background_thread，
+同時降低優先權並移離單一即時核心；不在背景執行任何 GPU 工作。
+另修正 Future 在等待逾時邊界剛完成時，回覆未經正常清除 pending／更新
+output_at 的分支，避免重複取用同一回覆與錯誤來源年齡。
+
+保留 46 ms、150 ms、200 ms、20 幀 proving、保留幀與掉幀界線。
+和 zoompilot 一樣：即使 drain 收到上一請求的新回覆，本幀新請求未完成
+仍算 held，證明期不因此視為通過。沒有提高逾時來掩蓋落後。
+error 現在區分第幾個 proving frame、連續保留或十秒視窗累積保留。
+模型紀錄新增 last_frame，保留失敗當幀的 warp_pack_ms、ipc_wait_ms、
+total_ms、output_age_ms、held 與 drained_reply，回退後也不被成功小模型覆蓋。
+warp_pack_ms 包含 drain／輸入打包及影像轉換；ipc_wait_ms 是本幀等待時間，
+不是前一個請求完整往返時間。實際頻率與改善程度仍需 C4 紀錄確認。

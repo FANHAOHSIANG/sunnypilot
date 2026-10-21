@@ -9,6 +9,7 @@ import numpy as np
 
 from openpilot.selfdrive.modeld.jetlink.recovery import Recovery
 from openpilot.selfdrive.modeld.jetlink.link import AsyncClient
+from openpilot.selfdrive.modeld.jetlink import link
 from openpilot.selfdrive.modeld.jetlink import model
 import test_port
 
@@ -79,6 +80,24 @@ class RecoveryTests(unittest.TestCase):
 
 
 class AsyncTests(unittest.TestCase):
+  def test_io_worker_leaves_inherited_modeld_core_using_real_upstream_helper(self):
+    from jetlink.transport import priority
+    with patch.object(priority.os, 'cpu_count', return_value=8), \
+         patch.object(priority.os, 'sched_getaffinity', return_value={7}), \
+         patch.object(priority.os, 'sched_setscheduler') as scheduler, \
+         patch.object(priority.os, 'sched_setaffinity') as affinity:
+      AsyncClient._background()
+    scheduler.assert_called_once()
+    affinity.assert_called_once_with(0, set(range(7)))
+
+  def test_connection_thread_also_leaves_modeld_core_before_handshake(self):
+    future = Future()
+    with patch.object(link, 'background_thread') as background, \
+         patch.object(link, 'Client') as client, patch.object(link, 'AsyncClient') as async_client:
+      client.side_effect = lambda: (background.assert_called_once() or object())
+      link.ClientConnection._connect(future)
+    self.assertIs(future.result(), async_client.return_value)
+
   def make_client(self):
     wire = SimpleNamespace(spec=object(), timeout=.15, infer=Mock(), close=Mock())
     c = AsyncClient(wire)
@@ -126,6 +145,34 @@ class AsyncTests(unittest.TestCase):
     with self.assertRaisesRegex(TimeoutError, 'wire timeout'):
       c.infer(np.ones(1), np.ones(1), 1)
 
+  def test_reply_finishing_at_timeout_boundary_consumed_once_with_correct_age(self):
+    class BoundaryReply(Future):
+      def result(self, timeout=None):
+        if not self.done():
+          self.set_result(np.ones(3))
+          raise TimeoutError('deadline boundary')
+        return super().result(timeout)
+    c = self.make_client()
+    c.pool.submit.return_value = BoundaryReply()
+    with patch.object(link.time, 'monotonic', return_value=10.):
+      np.testing.assert_array_equal(c.infer(np.ones(1), np.ones(1), 1), np.ones(3))
+    self.assertIsNone(c.pending)
+    self.assertTrue(c.received)
+    self.assertEqual(c.output_at, 10.)
+    self.assertIsNone(c.take_ready())
+
+  def test_transport_timeout_at_wait_boundary_is_still_an_error(self):
+    class BoundaryError(Future):
+      def result(self, timeout=None):
+        if not self.done():
+          self.set_exception(TimeoutError('wire failed'))
+          raise TimeoutError('wait expired')
+        return super().result(timeout)
+    c = self.make_client()
+    c.pool.submit.return_value = BoundaryError()
+    with self.assertRaisesRegex(TimeoutError, 'wire failed'):
+      c.infer(np.ones(1), np.ones(1), 1)
+
   def test_pending_request_hard_deadline(self):
     c = self.make_client()
     c.received = True
@@ -154,6 +201,45 @@ class ModelRecoveryTests(unittest.TestCase):
     self.assertIn('plan', out)
     self.assertTrue(a.active)
     self.local.run.assert_not_called()
+
+  def test_failed_proving_keeps_failed_frame_metrics_after_native_handback(self):
+    a = self.remote()
+    a.recovery.joined(1.)
+    for _ in range(3):
+      a.run({}, {}, self.inputs)
+    a.client.infer.return_value = None
+    self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
+    record = json.loads(self.status.read_text())
+    self.assertIn('held proving frame 4/20', record['error'])
+    self.assertEqual(record['last_frame']['proving_frame'], 4)
+    self.assertTrue(record['last_frame']['held'])
+    for key in ('warp_pack_ms', 'ipc_wait_ms', 'total_ms', 'output_age_ms'):
+      self.assertGreaterEqual(record['last_frame'][key], 0.)
+    self.assertEqual(record['fallback_count'], 1)
+    self.assertFalse(self.fault.exists())
+
+  def test_drained_previous_reply_does_not_excuse_a_new_proving_frame_hold(self):
+    a = self.remote()
+    c = AsyncClient(SimpleNamespace(spec=test_port.DEFAULT_SPEC, timeout=.15, infer=Mock(), close=Mock()))
+    self.addCleanup(c.close)
+    c.pool.shutdown()
+    c.pool = Mock()
+    c.pending = Future()
+    c.pending.set_result(np.zeros(test_port.DEFAULT_SPEC.output_nelem, np.float32))
+    c.started = 9.99
+    next_pending = Mock()
+    next_pending.result.side_effect = TimeoutError('still working')
+    next_pending.done.return_value = False
+    c.pool.submit.return_value = next_pending
+    a.client = c
+    a.recovery.joined(9.)
+    a.recovery.frames = 3
+    with patch.object(link.time, 'monotonic', return_value=10.):
+      self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
+    record = json.loads(self.status.read_text())
+    self.assertIn('held proving frame 4/20', record['error'])
+    self.assertTrue(record['last_frame']['drained_reply'])
+    self.assertTrue(record['last_frame']['held'])
 
   def test_proving_control_enable_forces_same_frame_native_recovery(self):
     a = self.remote()

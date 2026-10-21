@@ -137,6 +137,7 @@ class JoiningModel:
     self.prepare_error = ''
     self.recovery_error = ''
     self.inference_ms = 0.
+    self.last_frame = {}
     self.frame = 0
     self.reset = True
     self.spec = SPEC
@@ -185,6 +186,7 @@ class JoiningModel:
                                   recovery_error=self.recovery_error,
                                   phase=phase or self._phase(), handover_at=self.handover_at,
                                   inference_ms=self.inference_ms,
+                                  last_frame=self.last_frame,
                                   failures=self.recovery.failures, held=self.recovery.consecutive,
                                   fallback_until=self.fallback_until, fallback_count=self.fallback_count,
                                   proving=self.recovery.proving, model=model_name(self.spec), sha256=self.spec.sha256)))
@@ -270,6 +272,8 @@ class JoiningModel:
         if self.active and self.frame_drop_ratio > DROP_LIMIT:
           raise TimeoutError('Jetlink camera frame drop ratio exceeded')
         started = time.monotonic()
+        completed = None
+        self.last_frame = dict(proving_frame=self.recovery.frames + 1)
         if isinstance(self.client, AsyncClient):
           completed = self.client.take_ready()
           if completed is not None:
@@ -284,10 +288,17 @@ class JoiningModel:
           self.views[name][:] = remote_inputs[name]
         self.frame = (self.frame + 1) & 0xFFFFFFFF
         images = self.warp(bufs, transforms)
-        if isinstance(self.client, AsyncClient):
-          result = self.client.infer(images, self.packed, self.frame, self.reset, deadline=started + HOLD_FRAME)
-        else:
-          result = self.client.infer(images, self.packed, self.frame, self.reset)
+        warped_at = time.monotonic()
+        try:
+          if isinstance(self.client, AsyncClient):
+            result = self.client.infer(images, self.packed, self.frame, self.reset, deadline=started + HOLD_FRAME)
+          else:
+            result = self.client.infer(images, self.packed, self.frame, self.reset)
+        finally:
+          done = time.monotonic()
+          self.last_frame.update(frame=self.frame, warp_pack_ms=(warped_at - started) * 1000.,
+                                 ipc_wait_ms=(done - warped_at) * 1000., total_ms=(done - started) * 1000.,
+                                 drained_reply=completed is not None)
         held = result is None
         if held:
           if self.last_output is None:
@@ -295,6 +306,7 @@ class JoiningModel:
           result = self.last_output.copy()
         else:
           self._remember(result)
+        self.last_frame.update(held=held, output_age_ms=(time.monotonic() - self.last_output_at) * 1000.)
         was_proving = self.recovery.proving
         self.recovery.note(held, time.monotonic(), self.last_output_at)
         if was_proving and not self.recovery.proving:

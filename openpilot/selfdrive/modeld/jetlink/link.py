@@ -1,7 +1,6 @@
 """Bounded local IPC; the USB owner never executes on modeld's realtime thread."""
 import json
 from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
-import os
 import socket
 import struct
 import time
@@ -13,6 +12,7 @@ from openpilot.selfdrive.modeld.jetlink import VENDOR  # noqa: F401
 from openpilot.common.jetlink_status import FAULT, STATUS, read_status, fault_active  # noqa: F401
 from jetlink.spec import ModelSpec
 from openpilot.selfdrive.modeld.jetlink.contracts import DEFAULT_SPEC, validate_model_spec
+from jetlink.transport.priority import background_thread
 
 SPEC = DEFAULT_SPEC
 SOCKET = '/dev/shm/sunnypilot-jetlink.sock'
@@ -164,9 +164,8 @@ class ClientConnection:
   def _connect(future):
     client = None
     try:
-      # A thread otherwise inherits modeld's realtime scheduling policy.
-      if hasattr(os, 'sched_setscheduler'):
-        os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+      # Match zoompilot: drop realtime AND leave the frame loop's CPU pin.
+      background_thread()
       client = AsyncClient(Client())
       future.set_result(client)
     except InvalidStateError:
@@ -203,8 +202,7 @@ class AsyncClient:
 
   @staticmethod
   def _background():
-    if hasattr(os, 'sched_setscheduler'):
-      os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+    background_thread()
 
   def infer(self, image, packed, frame, reset=False, source_sof=0, *, deadline=None):
     self.sent = self.pending is None
@@ -220,10 +218,13 @@ class AsyncClient:
       output = self.pending.result(timeout=max(0., until - time.monotonic()))
     except TimeoutError:
       if self.pending.done():
-        return self.pending.result()  # propagate a transport TimeoutError
-      if time.monotonic() - self.started >= self.client.timeout:
-        raise TimeoutError('Jetlink inference deadline exceeded') from None
-      return None
+        # A reply can finish just as Future.result times out. Consume it via
+        # the normal path too, so it cannot be returned twice with stale age.
+        output = self.pending.result()  # propagate a transport TimeoutError
+      else:
+        if time.monotonic() - self.started >= self.client.timeout:
+          raise TimeoutError('Jetlink inference deadline exceeded') from None
+        return None
     self.pending = None
     self.received = True
     self.output_at = self.started
