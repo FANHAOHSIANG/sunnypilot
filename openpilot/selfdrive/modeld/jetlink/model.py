@@ -130,8 +130,9 @@ class JoiningModel:
 
   def update(self, sm, metadata):
     now = time.monotonic()
-    self.join_allowed = may_join(now, {k: sm[k] for k in ('carState', 'selfdriveState', 'carControl')},
-                                {k: sm.valid[k] and sm.alive[k] for k in ('carState', 'selfdriveState', 'carControl')}, sm.recv_time)
+    required = ('carState', 'selfdriveState', 'carControl', 'carControlSP')
+    self.join_allowed = may_join(now, {k: sm[k] for k in required},
+                                {k: sm.valid[k] and sm.alive[k] for k in required}, sm.recv_time)
     if self.join_allowed:
       FAULT.unlink(missing_ok=True)
     self.ready = state().get('state') == 'ready'
@@ -221,14 +222,23 @@ class JoiningModel:
         # have been paused for a handshake and must not be assumed continuous.
         FAULT.write_text(str(time.monotonic()))
         self.error = str(exc)
-        self.client.close()
+        try:
+          self.client.close()
+        except Exception:
+          cloudlog.exception('Jetlink client close failed during local recovery')
         self.client = None
         self.active = False
         self._reset_small()
         self.small_runs = 0
         self.next_join = time.monotonic() + 5
         self.next_status = 0
-        return None
+        # Match zoompilot's same-frame fallback: do not leave the publisher
+        # without a model result solely because the remote failed. Keep the
+        # disengagement fault latched and let native inference errors surface.
+        result = self.small.run(bufs, transforms, inputs, None)
+        if result is not None:
+          self.small_runs += 1
+        return result
     result = self.small.run(bufs, transforms, inputs, after_enqueue)
     if result is not None:
       self.small_runs += 1

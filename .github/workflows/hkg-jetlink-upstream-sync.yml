@@ -64,6 +64,7 @@ jobs:
           python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/modeld/modeld.py
           PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
           PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_bsm_compat -v
+          PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
           python -m unittest openpilot.selfdrive.ui.tests.test_blue_path openpilot.selfdrive.ui.tests.test_sunnylink_translations -v
           python tools/commaview/install.py --check
           git -c core.whitespace=-blank-at-eof diff --check HEAD~1 HEAD
@@ -84,3 +85,4 @@ jobs:
           gh pr create --base "$TARGET_BRANCH" --head "$SYNC_BRANCH" \
             --title 'Sync HKG Jetlink with Tony and official sunnypilot' \
             --body 'Merges Tony hkg-enhanced and official sunnypilot master; dependency conflicts stop for review. Jetlink software regression checks passed. Review runtime and UI changes and validate on C4 before merging. This PR does not update installed devices.'
+

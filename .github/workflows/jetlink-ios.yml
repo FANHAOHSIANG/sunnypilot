@@ -7,6 +7,9 @@ on:
       - openpilot/selfdrive/modeld/jetlink/**
       - third_party/jetlink/**
       - openpilot/common/params_keys.h
+      - openpilot/selfdrive/locationd/paramsd.py
+      - openpilot/sunnypilot/selfdrive/car/dynamics_compat.py
+      - openpilot/sunnypilot/selfdrive/car/tests/test_dynamics_compat.py
       - openpilot/selfdrive/ui/sunnypilot/**/models.py
       - tools/jetlink/**
       - .github/workflows/jetlink-ios.yml
@@ -26,9 +29,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install numpy pytest pycapnp requests
-      - run: git submodule update --init --depth 1 tinygrad_repo
+      - run: git submodule update --init --depth 1 tinygrad_repo opendbc_repo
       - run: bash -n tools/jetlink/ios-root.sh
       - run: python tools/jetlink/check_ui_params.py
       - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
+      - run: PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
       - run: PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
       - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot
+

@@ -32,6 +32,7 @@ class GateTests(unittest.TestCase):
       'carState': SimpleNamespace(standstill=True, vEgo=0.),
       'selfdriveState': SimpleNamespace(enabled=False, active=False),
       'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),
+      'carControlSP': SimpleNamespace(mads=SimpleNamespace(enabled=False, active=False)),
     }
     self.valid = dict.fromkeys(self.messages, True)
     self.received = dict.fromkeys(self.messages, 9.9)
@@ -54,6 +55,11 @@ class GateTests(unittest.TestCase):
     for standstill, speed in [(False, 0.), (True, .01), (True, -1.), (True, float('nan'))]:
       self.messages['carState'] = SimpleNamespace(standstill=standstill, vEgo=speed)
       self.assertFalse(self.allowed())
+
+  def test_enabled_but_paused_mads_prevents_model_switch(self):
+    self.messages['carControlSP'].mads.enabled = True
+    self.messages['carControlSP'].mads.active = False
+    self.assertFalse(self.allowed())
 
   def test_each_stale_invalid_missing_or_future_message_blocks(self):
     for channel in self.messages:
@@ -263,15 +269,56 @@ class ModelTransitionTests(unittest.TestCase):
     self.adapter.client = Mock()
     self.adapter.client.infer.side_effect = TimeoutError('no reply')
     self.adapter.active = True
-    self.assertIsNone(self.adapter.run({}, {}, self.inputs))
+    self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
     self.assertTrue(self.fault.exists())
     self.assertFalse(self.adapter.active)
     self.assertIsNone(self.adapter.client)
-    self.assertEqual(self.adapter.small_runs, 0)
-    np.testing.assert_array_equal(self.local.prev_desire, np.zeros(8))
-    self.local.run.assert_not_called()
-    self.adapter.run({}, {}, self.inputs)
     self.assertEqual(self.adapter.small_runs, 1)
+    np.testing.assert_array_equal(self.local.prev_desire, np.zeros(8))
+    self.local.run.assert_called_once_with({}, {}, self.inputs, None)
+    self.adapter.run({}, {}, self.inputs)
+    self.assertEqual(self.adapter.small_runs, 2)
+
+  def test_first_remote_frame_failure_also_returns_native_output_and_latches_fault(self):
+    self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
+    self.adapter.client = Mock()
+    self.adapter.client.infer.side_effect = ValueError('invalid remote reply')
+    self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
+    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.adapter.active)
+    self.assertEqual(self.adapter.small_runs, 1)
+
+  def test_socket_close_failure_does_not_prevent_native_fallback(self):
+    self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
+    self.adapter.client = Mock()
+    self.adapter.client.infer.side_effect = TimeoutError('no reply')
+    self.adapter.client.close.side_effect = OSError('close failed')
+    self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
+    self.assertTrue(self.fault.exists())
+    self.assertIsNone(self.adapter.client)
+
+  def test_failed_native_fallback_is_not_hidden(self):
+    self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
+    self.adapter.client = Mock()
+    self.adapter.client.infer.side_effect = TimeoutError('no reply')
+    self.local.run.side_effect = RuntimeError('native model failed')
+    with self.assertRaisesRegex(RuntimeError, 'native model failed'):
+      self.adapter.run({}, {}, self.inputs)
+    self.assertTrue(self.fault.exists())
+
+  def test_after_failure_moving_does_not_rejoin_or_clear_fault(self):
+    self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
+    self.adapter.client = Mock()
+    self.adapter.client.infer.side_effect = TimeoutError('no reply')
+    self.adapter.join_allowed = False
+    self.adapter.ready = True
+    self.adapter.run({}, {}, self.inputs)
+    self.adapter.next_join = 0
+    with patch.object(model, 'ClientConnection') as connect:
+      for _ in range(4):
+        self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
+      connect.assert_not_called()
+    self.assertTrue(self.fault.exists())
 
   def test_active_remote_continues_when_join_gate_closes(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
@@ -288,7 +335,8 @@ class ModelTransitionTests(unittest.TestCase):
     self.fault.write_text('0')
     messages = {'carState': SimpleNamespace(standstill=True, vEgo=0.),
                 'selfdriveState': SimpleNamespace(enabled=False, active=False),
-                'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False)}
+                'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),
+                'carControlSP': SimpleNamespace(mads=SimpleNamespace(enabled=False, active=False))}
     class State(dict):
       pass
     sm = State(messages)
