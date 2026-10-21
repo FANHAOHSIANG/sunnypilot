@@ -455,9 +455,15 @@ def main(demo=False):
       run_count = 0
       model_output = None
     if jetlink_model is not None and jetlink_model.handovers != handovers_before:
-      # zoompilot forgives the bounded handover stall, not ongoing lag.
+      # Match zoompilot: restart the existing 10-frame camera-drop warm-up
+      # after a real handover. Lost camera frames arrive on the next iteration.
+      # Message freshness/frequency, CAN and localization checks stay enabled.
+      run_count = 0
       frame_dropped_filter.x = 0.
       frame_drop_ratio = 0.
+      # Use the model that produced this frame, including a same-frame handback.
+      lat_smooth_seconds = jetlink_model.lat_smooth_seconds
+      lat_action_t = sm["lateralDelay"].lateralDelay + lat_smooth_seconds + frame_delay + action_delay
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
 

@@ -7,6 +7,11 @@ on:
       - openpilot/selfdrive/modeld/jetlink/**
       - third_party/jetlink/**
       - openpilot/common/params_keys.h
+      - openpilot/common/jetlink_status.py
+      - openpilot/cereal/custom.capnp
+      - openpilot/selfdrive/selfdrived/selfdrived.py
+      - openpilot/sunnypilot/selfdrive/selfdrived/events.py
+      - openpilot/selfdrive/modeld/modeld.py
       - openpilot/selfdrive/locationd/paramsd.py
       - openpilot/sunnypilot/selfdrive/car/dynamics_compat.py
       - openpilot/sunnypilot/selfdrive/car/tests/test_dynamics_compat.py
@@ -41,5 +46,5 @@ jobs:
       - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
       - run: PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
       - run: PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
-      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot
+      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot openpilot/selfdrive/modeld/modeld.py openpilot/selfdrive/selfdrived/selfdrived.py openpilot/sunnypilot/selfdrive/selfdrived/events.py openpilot/common/jetlink_status.py
 

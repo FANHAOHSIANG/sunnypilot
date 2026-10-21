@@ -270,13 +270,13 @@ class ModelTransitionTests(unittest.TestCase):
       self.adapter.run({}, {}, self.inputs)
       connect.assert_not_called()
 
-  def test_live_failure_latches_fault_resets_local_and_requires_rewarm(self):
+  def test_live_failure_returns_local_resets_history_without_synthetic_fault(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
     self.adapter.client = Mock()
     self.adapter.client.infer.side_effect = TimeoutError('no reply')
     self.adapter.active = True
     self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
     self.assertFalse(self.adapter.active)
     self.assertIsNone(self.adapter.client)
     self.assertEqual(self.adapter.small_runs, 1)
@@ -285,12 +285,12 @@ class ModelTransitionTests(unittest.TestCase):
     self.adapter.run({}, {}, self.inputs)
     self.assertEqual(self.adapter.small_runs, 2)
 
-  def test_first_remote_frame_failure_also_returns_native_output_and_latches_fault(self):
+  def test_first_remote_frame_failure_returns_native_output_without_synthetic_fault(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
     self.adapter.client = Mock()
     self.adapter.client.infer.side_effect = ValueError('invalid remote reply')
     self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
     self.assertFalse(self.adapter.active)
     self.assertEqual(self.adapter.small_runs, 1)
 
@@ -300,7 +300,7 @@ class ModelTransitionTests(unittest.TestCase):
     self.adapter.client.infer.side_effect = TimeoutError('no reply')
     self.adapter.client.close.side_effect = OSError('close failed')
     self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
     self.assertIsNone(self.adapter.client)
 
   def test_failed_native_fallback_is_not_hidden(self):
@@ -312,7 +312,7 @@ class ModelTransitionTests(unittest.TestCase):
       self.adapter.run({}, {}, self.inputs)
     self.assertTrue(self.fault.exists())
 
-  def test_after_failure_engaged_does_not_rejoin_or_clear_fault(self):
+  def test_after_failure_engaged_stays_native_without_synthetic_fault(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
     self.adapter.client = Mock()
     self.adapter.client.infer.side_effect = TimeoutError('no reply')
@@ -324,7 +324,7 @@ class ModelTransitionTests(unittest.TestCase):
       for _ in range(4):
         self.assertEqual(self.adapter.run({}, {}, self.inputs), {'local': True})
       connect.assert_not_called()
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
 
   def test_active_remote_continues_when_join_gate_closes(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))

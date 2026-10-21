@@ -357,6 +357,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     e2eChime @23;
     laneChangeRoadEdge @24;
     bigModelReady @25;
+    jetlinkFallback @26;
   }
 }
 

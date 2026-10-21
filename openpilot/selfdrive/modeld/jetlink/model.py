@@ -16,6 +16,15 @@ from openpilot.selfdrive.modeld.jetlink.artifact import load_prepared, save_prep
 from openpilot.common.jetlink_status import MODEL_STATUS
 
 
+def retime_inputs(inputs, old_smoothing, new_smoothing):
+  if old_smoothing == new_smoothing:
+    return inputs
+  result = dict(inputs)
+  result['action_t'] = inputs['action_t'].copy()
+  result['action_t'][0] += new_smoothing - old_smoothing
+  return result
+
+
 def make_warp_inputs():
   from tinygrad import Tensor
   transforms = {k: np.eye(3, dtype=np.float32) for k in ('tfm', 'big_tfm')}
@@ -102,8 +111,9 @@ class JoiningModel:
   """Leave all control and message publication in sunnypilot's stock modeld.
 
   Warp preparation requires standstill. Admission requires all controls off.
-  A failed live session latches commIssue before local inference resumes; a
-  retry proves its first 20 frames with engagement blocked.
+  A failed remote session returns a validated local result on the same frame.
+  Only failed local recovery latches commIssue; a remote rejoin still proves
+  its first 20 frames with engagement blocked.
   """
   def __init__(self, small, width, height):
     from openpilot.selfdrive.modeld.parse_model_outputs import Parser
@@ -122,6 +132,8 @@ class JoiningModel:
     self.handovers = 0
     self.next_join = self.next_status = 0.
     self.error = ''
+    self.fallback_until = 0.
+    self.fallback_count = 0
     self.frame = 0
     self.reset = True
     self.spec = SPEC
@@ -151,7 +163,8 @@ class JoiningModel:
     if now >= self.next_status:
       tmp = MODEL_STATUS.with_suffix('.tmp')
       tmp.write_text(json.dumps(dict(state='active' if self.active else 'local', active=self.active, proving=self.recovery.proving,
-                                     failures=self.recovery.failures, held=self.recovery.consecutive, ready=self.ready, error=self.error, model=model_name(self.spec),
+                                     failures=self.recovery.failures, held=self.recovery.consecutive, ready=self.ready, error=self.error,
+                                     fallback_until=self.fallback_until, fallback_count=self.fallback_count, model=model_name(self.spec),
                                      sha256=self.spec.sha256, updated=now)))
       os.replace(tmp, MODEL_STATUS)
       self.next_status = now + 1
@@ -160,7 +173,9 @@ class JoiningModel:
     # Publish the no-entry gate before the first remote inference. Failure to
     # publish aborts admission rather than allowing an unproven model.
     tmp = MODEL_STATUS.with_suffix('.tmp')
-    tmp.write_text(json.dumps(dict(updated=time.monotonic(), active=self.active,
+    tmp.write_text(json.dumps(dict(updated=time.monotonic(), state='active' if self.active else 'local',
+                                  active=self.active, ready=self.ready, error=self.error,
+                                  fallback_until=self.fallback_until, fallback_count=self.fallback_count,
                                   proving=self.recovery.proving, sha256=self.spec.sha256)))
     os.replace(tmp, MODEL_STATUS)
     self.next_status = 0
@@ -181,6 +196,7 @@ class JoiningModel:
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     from openpilot.common.swaglog import cloudlog
+    frame_smoothing = self.lat_smooth_seconds
     if self.preparation is not None and not self.ready:
       self.preparation.close()
       self.preparation = None
@@ -216,6 +232,7 @@ class JoiningModel:
           self.last_output = None
           self.handovers += 1
           self.recovery.joined(time.monotonic())
+          self.fallback_until = 0.
           self._write_proving()
       except Exception as exc:
         if self.client is not None:
@@ -239,8 +256,10 @@ class JoiningModel:
         desire[0] = 0
         self.views['desire'][:] = np.where(desire - self.prev_desire > .99, desire, 0)
         self.prev_desire[:] = desire
+        remote_smoothing = .1 if self.spec.sha256 == V3_SPEC.sha256 else 0.
+        remote_inputs = retime_inputs(inputs, frame_smoothing, remote_smoothing)
         for name in ('traffic_convention', 'action_t'):
-          self.views[name][:] = inputs[name]
+          self.views[name][:] = remote_inputs[name]
         self.frame = (self.frame + 1) & 0xFFFFFFFF
         images = self.warp(bufs, transforms)
         if isinstance(self.client, AsyncClient):
@@ -273,10 +292,7 @@ class JoiningModel:
           outputs['raw_pred'] = result.copy()
         return outputs
       except Exception as exc:
-        cloudlog.exception('Jetlink failed; requesting disengagement before local recovery')
-        # Latch even if the first remote frame fails: the native recurrence may
-        # have been paused for a handshake and must not be assumed continuous.
-        FAULT.write_text(str(time.monotonic()))
+        cloudlog.exception('Jetlink failed; attempting same-frame local recovery')
         self.error = str(exc)
         try:
           self.client.close()
@@ -286,19 +302,39 @@ class JoiningModel:
         self.active = False
         self.handovers += 1
         self.last_output = None
-        self._reset_small()
         self.small_runs = 0
         self.next_join = time.monotonic() + self.recovery.failed(time.monotonic())
         self.next_status = 0
+        try:
+          self._reset_small()
+          result = self._run_local(bufs, transforms, retime_inputs(inputs, frame_smoothing, 0.), None)
+        except Exception:
+          # A reset failure is as fatal as a failed local inference. Never
+          # announce recovery before a usable native result exists.
+          self.fallback_until = 0.
+          FAULT.write_text(str(time.monotonic()))
+          self._write_proving()
+          raise
+        # Do not inject a synthetic commIssue just because the remote left.
+        # The normal CAN, process, model freshness and localization checks
+        # remain authoritative and can still disengage independently.
+        self.fallback_count += 1
+        self.fallback_until = time.monotonic() + 5.
         self._write_proving()
-        # Match zoompilot's same-frame fallback: do not leave the publisher
-        # without a model result solely because the remote failed. Keep the
-        # disengagement fault latched and let native inference errors surface.
-        result = self.small.run(bufs, transforms, inputs, None)
-        if result is not None:
-          self.small_runs += 1
+        cloudlog.warning('Jetlink fallback: small model recovered on this frame')
         return result
-    result = self.small.run(bufs, transforms, inputs, after_enqueue)
-    if result is not None:
-      self.small_runs += 1
+    return self._run_local(bufs, transforms, inputs, after_enqueue)
+
+  def _run_local(self, bufs, transforms, inputs, after_enqueue):
+    try:
+      result = self.small.run(bufs, transforms, inputs, after_enqueue)
+      if not isinstance(result, dict) or not result:
+        raise RuntimeError('Local model did not return an output')
+      if any(not np.all(np.isfinite(value)) for value in result.values()):
+        raise ValueError('Local model output not finite')
+    except Exception:
+      self.fallback_until = 0.
+      FAULT.write_text(str(time.monotonic()))
+      raise
+    self.small_runs += 1
     return result

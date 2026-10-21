@@ -14,7 +14,7 @@ jetlink_repo/jetlink/openpilot/joining.py 與 sunnypilot/jetlink_adapter。
 | 延遲上限 | 無保留幀規則 | 連續 5 次或 10 秒內超過 20 次保留、輸出來源超過 200 ms、相機 frame_drop_ratio > 0.0075 時回退。不重用非有限或身分不符的輸出 |
 | 切入驗證 | 無 | 前 20 幀為 proving；前三幀容許暖機，其後證明期遇到保留幀即回退。bigModelLoading 的 NO_ENTRY 同時阻止巡航及 MADS 啟用；控制狀態意外改變也立即回退 |
 | 重試 | 固定 5 秒 | 前三次失敗各等 1 秒，之後 5/10/20/40/60 秒，上限 60 秒；成功持續超過 60 秒重設失敗次數。時間到仍須控制全關及本機完成三幀暖機 |
-| 故障警示 | 停車解除控制才清除 | 保留 commIssue 退出控制；本機三幀暖機完成且控制全關後才解除鎖存。證明期不清除鎖存，不停用 ACC/CAN/safety 警示 |
+| 故障警示 | 任何遠端失敗都鎖存 commIssue | 小模型同幀成功接手時僅提示，不額外解除控制；只有本機恢復失敗才鎖存 fault。真正的 ACC/CAN/定位/程序故障依舊生效 |
 
 來源：zoompilot/jetlink d24328d849b0e5154b55f149dc18c5dfe8bd79cc 的
 joining.py / model_state.py（MIT），以及 zoompilot/zoompilot 204f5295 的 Adapter.in_control。
@@ -39,7 +39,8 @@ USB 引擎仍存活時可重試；整個 USB 斷線後也允許在行駛中背�
 ## Cruise Fault 還需要紀錄
 
 本分支的 Cruise Fault 對應 accFaulted；HKG CAN-FD 的來源是 TCS.ACCEnable != 0。
-Jetlink fault 另由 commIssue 警示。訊息名稱與時序不足以判定 ACC 故障由模型切換造成。
+只有本機恢復失敗才由 Jetlink fatal fault 觸發 commIssue；遠端失效且本機正常不額外退出控制。
+訊息名稱與時序不足以判定 ACC 故障由模型切換造成。
 沒有更動 accFaulted 的來源或警示，仍需該次事件附近的車端紀錄排查。
 
 先保持停車，在 C4 取得啟動與模型錯誤：
@@ -80,3 +81,27 @@ modeld 的 may_join 與 20 幀 proving 完全保留：巡航或 MADS 啟用時�
 首次 QCOM warp 準備仍只在停止且解除控制時進行；若 C4 在行駛中重啟，
 USB 可先恢復 ready，初次 GPU 準備仍需等安全停妥。這不是行駛中無縫
 熱切換，也不會在重新連線後自動替駕駛重新啟用巡航。
+
+## 遠端失效時不中斷接手的程式路徑
+
+修正先前移植與 zoompilot 的差異：遠端逾時、掉幀過多、壞輸出或斷線後，
+先關閉遠端 client、重設本機循環狀態，在同一幀執行已暖機的小模型。
+只有得到非空且所有值為有限數值的 native output，才發布 local/fallback 狀態
+並加入 jetlinkFallback 提示；成功前不寫入 synthetic commIssue latch。
+正常接手不要求先解除巡航或 MADS，也不會替駕駛開關巡航。
+
+小模型重設失敗、推論例外、空輸出或非有限輸出仍寫入 fatal fault 並拋出；
+既有程序存活、訊息時效與頻率、ACC、CAN、Panda、安全及定位檢查沒有移除。
+沒有整段忽略通訊／定位事件的 settling 豁免；因此這些檢查真的失敗時仍會退出，
+不能宣稱任何 USB 故障都能無縫保持巡航。
+
+依 zoompilot 的 handed_over 重啟現有 10 幀 camera-drop warm-up，僅容忍
+實際模型交接造成的相機幀落後；服務存活、頻率與定位檢查仍保留。
+V3 換回小模型時同步調整當幀的 lateral action delay，避免沿用 V3 的 0.1 秒平滑量。
+恢復的大模型仍由原有 controls-off gate 與 20 幀 proving 驗證，兩個方向的限制不同。
+
+回歸測試執行正式巡航與 MADS state-machine 方法，確認提示不解除控制，
+並確認 accFaulted/canError/commIssue/locationdTemporaryError/processNotRunning
+同時存在時仍觸發原有退出機制。另驗證 Cap'n Proto 新事件序列化、同幀輸出、
+空／壞本機輸出、重設例外、後續本機崩潰、提示時效及 V3 時間參數。
+沒有 C4/QCOM 或實車故障注入驗證，不建議在道路上刻意拔線測試。

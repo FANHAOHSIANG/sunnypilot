@@ -160,7 +160,7 @@ class ModelRecoveryTests(unittest.TestCase):
     a.recovery.joined(1.)
     a.join_allowed = False
     self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
     self.assertFalse(a.active)
 
   def test_proof_status_and_no_entry_until_twenty_frames(self):
@@ -172,12 +172,12 @@ class ModelRecoveryTests(unittest.TestCase):
       a.run({}, {}, self.inputs)
     self.assertFalse(json.loads(self.status.read_text())['proving'])
 
-  def test_drop_ratio_demotes_to_native_and_retains_fault(self):
+  def test_drop_ratio_demotes_to_native_without_synthetic_fault(self):
     a = self.remote()
     a.active = True
     a.frame_drop_ratio = .008
     self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
-    self.assertTrue(self.fault.exists())
+    self.assertFalse(self.fault.exists())
 
   def test_moving_disengaged_can_rejoin_prepared_warp(self):
     a = self.remote()
