@@ -6,7 +6,8 @@ import time
 
 import numpy as np
 
-from openpilot.selfdrive.modeld.jetlink.link import ClientConnection, SPEC, FAULT, state
+from openpilot.selfdrive.modeld.jetlink.link import AsyncClient, ClientConnection, SPEC, FAULT, state
+from openpilot.selfdrive.modeld.jetlink.recovery import Recovery, HOLD_FRAME, DROP_LIMIT
 from openpilot.selfdrive.modeld.jetlink.prepare import WarpPreparation
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
@@ -100,9 +101,9 @@ class Warp:
 class JoiningModel:
   """Leave all control and message publication in sunnypilot's stock modeld.
 
-  Admission and warp preparation happen while stopped/disengaged. Once joined,
-  moving does not disconnect the model. A failed live session latches commIssue
-  before local inference resumes and cannot rejoin until stopped/disengaged.
+  Warp preparation requires standstill. Admission requires all controls off.
+  A failed live session latches commIssue before local inference resumes; a
+  retry proves its first 20 frames with engagement blocked.
   """
   def __init__(self, small, width, height):
     from openpilot.selfdrive.modeld.parse_model_outputs import Parser
@@ -113,6 +114,12 @@ class JoiningModel:
     self.parser = Parser()
     self.active = self.ready = self.join_allowed = False
     self.small_runs = 0
+    self.recovery = Recovery()
+    self.last_output = None
+    self.last_output_at = 0.
+    self.prepare_allowed = False
+    self.frame_drop_ratio = 0.
+    self.handovers = 0
     self.next_join = self.next_status = 0.
     self.error = ''
     self.frame = 0
@@ -133,7 +140,9 @@ class JoiningModel:
     required = ('carState', 'selfdriveState', 'carControl', 'carControlSP')
     self.join_allowed = may_join(now, {k: sm[k] for k in required},
                                 {k: sm.valid[k] and sm.alive[k] for k in required}, sm.recv_time)
-    if self.join_allowed:
+    cs = sm['carState']
+    self.prepare_allowed = self.join_allowed and cs.standstill and abs(cs.vEgo) < .01
+    if self.join_allowed and self.small_runs >= 3 and not self.recovery.proving:
       FAULT.unlink(missing_ok=True)
     self.ready = state().get('state') == 'ready'
     if self.connection is not None and not (self.ready and self.join_allowed):
@@ -141,11 +150,26 @@ class JoiningModel:
       self.connection = None
     if now >= self.next_status:
       tmp = MODEL_STATUS.with_suffix('.tmp')
-      tmp.write_text(json.dumps(dict(state='active' if self.active else 'local', active=self.active,
-                                     ready=self.ready, error=self.error, model=model_name(self.spec),
+      tmp.write_text(json.dumps(dict(state='active' if self.active else 'local', active=self.active, proving=self.recovery.proving,
+                                     failures=self.recovery.failures, held=self.recovery.consecutive, ready=self.ready, error=self.error, model=model_name(self.spec),
                                      sha256=self.spec.sha256, updated=now)))
       os.replace(tmp, MODEL_STATUS)
       self.next_status = now + 1
+
+  def _write_proving(self):
+    # Publish the no-entry gate before the first remote inference. Failure to
+    # publish aborts admission rather than allowing an unproven model.
+    tmp = MODEL_STATUS.with_suffix('.tmp')
+    tmp.write_text(json.dumps(dict(updated=time.monotonic(), active=self.active,
+                                  proving=self.recovery.proving, sha256=self.spec.sha256)))
+    os.replace(tmp, MODEL_STATUS)
+    self.next_status = 0
+
+  def _remember(self, result):
+    self.last_output = result.copy()
+    self.last_output_at = self.client.output_at if isinstance(self.client, AsyncClient) else time.monotonic()
+    if 'prev_feat' in self.views:
+      self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
 
   def _reset_small(self):
     self.small.prev_desire[:] = 0
@@ -160,7 +184,7 @@ class JoiningModel:
     if self.preparation is not None and not self.ready:
       self.preparation.close()
       self.preparation = None
-    if self.warp is None and self.small_runs >= 3 and self.ready and self.join_allowed and time.monotonic() >= self.next_join:
+    if self.warp is None and self.small_runs >= 3 and self.ready and self.prepare_allowed and time.monotonic() >= self.next_join:
       try:
         if self.preparation is None:
           self.preparation = WarpPreparation(*self.warp_size)
@@ -189,12 +213,28 @@ class JoiningModel:
             self.spec.packed_shapes.items(), np.split(self.packed, np.cumsum(self.spec.packed_sizes[:-1])), strict=True)}
           self.prev_desire[:] = 0
           self.reset = True
+          self.last_output = None
+          self.handovers += 1
+          self.recovery.joined(time.monotonic())
+          self._write_proving()
       except Exception as exc:
+        if self.client is not None:
+          self.client.close()
+          self.client = None
         self.connection = None
         self.error = str(exc)
-        self.next_join = time.monotonic() + 5
+        self.next_join = time.monotonic() + self.recovery.failed(time.monotonic())
     if self.client is not None:
       try:
+        if self.recovery.proving and not self.join_allowed:
+          raise RuntimeError('Controls enabled during Jetlink proving')
+        if self.active and self.frame_drop_ratio > DROP_LIMIT:
+          raise TimeoutError('Jetlink camera frame drop ratio exceeded')
+        started = time.monotonic()
+        if isinstance(self.client, AsyncClient):
+          completed = self.client.take_ready()
+          if completed is not None:
+            self._remember(completed)
         desire = inputs['desire_pulse'].copy()
         desire[0] = 0
         self.views['desire'][:] = np.where(desire - self.prev_desire > .99, desire, 0)
@@ -203,9 +243,25 @@ class JoiningModel:
           self.views[name][:] = inputs[name]
         self.frame = (self.frame + 1) & 0xFFFFFFFF
         images = self.warp(bufs, transforms)
-        result = self.client.infer(images, self.packed, self.frame, self.reset)
+        if isinstance(self.client, AsyncClient):
+          result = self.client.infer(images, self.packed, self.frame, self.reset, deadline=started + HOLD_FRAME)
+        else:
+          result = self.client.infer(images, self.packed, self.frame, self.reset)
+        held = result is None
+        if held:
+          if self.last_output is None:
+            raise TimeoutError('No Jetlink output available to hold')
+          result = self.last_output.copy()
+        else:
+          self._remember(result)
+        was_proving = self.recovery.proving
+        self.recovery.note(held, time.monotonic(), self.last_output_at)
+        if was_proving and not self.recovery.proving:
+          self._write_proving()
+          if self.join_allowed:
+            FAULT.unlink(missing_ok=True)
         outputs = parse_outputs(self.parser, self.spec, result)
-        if 'prev_feat' in self.views:
+        if not held and 'prev_feat' in self.views:
           self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
         self.reset = False
         if not self.active:
@@ -228,10 +284,13 @@ class JoiningModel:
           cloudlog.exception('Jetlink client close failed during local recovery')
         self.client = None
         self.active = False
+        self.handovers += 1
+        self.last_output = None
         self._reset_small()
         self.small_runs = 0
-        self.next_join = time.monotonic() + 5
+        self.next_join = time.monotonic() + self.recovery.failed(time.monotonic())
         self.next_status = 0
+        self._write_proving()
         # Match zoompilot's same-frame fallback: do not leave the publisher
         # without a model result solely because the remote failed. Keep the
         # disengagement fault latched and let native inference errors surface.

@@ -1,6 +1,6 @@
 """Bounded local IPC; the USB owner never executes on modeld's realtime thread."""
 import json
-from concurrent.futures import Future, InvalidStateError
+from concurrent.futures import Future, InvalidStateError, ThreadPoolExecutor
 import os
 import socket
 import struct
@@ -167,7 +167,7 @@ class ClientConnection:
       # A thread otherwise inherits modeld's realtime scheduling policy.
       if hasattr(os, 'sched_setscheduler'):
         os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
-      client = Client()
+      client = AsyncClient(Client())
       future.set_result(client)
     except InvalidStateError:
       if client is not None:
@@ -185,3 +185,62 @@ class ClientConnection:
       except Exception:
         return
       client.close()
+
+
+class AsyncClient:
+  """At most one IPC request in flight; GPU work stays on modeld's thread.
+
+  None means still pending, not a new response. Buffers are owned copies so a
+  camera frame or recurrence buffer cannot be overwritten under the IO thread.
+  """
+  def __init__(self, client):
+    self.client, self.spec = client, client.spec
+    self.pending = None
+    self.received = False
+    self.sent = False
+    self.started = self.output_at = 0.
+    self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='jetlink-infer', initializer=self._background)
+
+  @staticmethod
+  def _background():
+    if hasattr(os, 'sched_setscheduler'):
+      os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+
+  def infer(self, image, packed, frame, reset=False, source_sof=0, *, deadline=None):
+    self.sent = self.pending is None
+    if self.sent:
+      self.started = time.monotonic()
+      self.pending = self.pool.submit(self.client.infer, image.copy(), packed.copy(), frame, reset, source_sof)
+    # The very first reply has no previous output to hold. Bound its warm-up
+    # with the existing IPC timeout; subsequent frames share a 46 ms budget.
+    until = self.started + self.client.timeout if not self.received else deadline
+    if until is None:
+      until = time.monotonic() + .046
+    try:
+      output = self.pending.result(timeout=max(0., until - time.monotonic()))
+    except TimeoutError:
+      if self.pending.done():
+        return self.pending.result()  # propagate a transport TimeoutError
+      if time.monotonic() - self.started >= self.client.timeout:
+        raise TimeoutError('Jetlink inference deadline exceeded') from None
+      return None
+    self.pending = None
+    self.received = True
+    self.output_at = self.started
+    return output
+
+  def take_ready(self):
+    # Drain a late reply before packing the next frame. This preserves queued
+    # model recurrence and allows the next request on the very next camera
+    # frame, rather than accidentally halving throughput after every hold.
+    if self.pending is None or not self.pending.done():
+      return None
+    output = self.pending.result()
+    self.pending = None
+    self.received = True
+    self.output_at = self.started
+    return output
+
+  def close(self):
+    self.client.close()
+    self.pool.shutdown(wait=False, cancel_futures=True)

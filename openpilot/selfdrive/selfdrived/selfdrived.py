@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from openpilot.common.jetlink_status import fault_active as jetlink_fault_active
+from openpilot.common.jetlink_status import fault_active as jetlink_fault_active, proving_active as jetlink_proving_active
 import os
 import time
 import threading
@@ -197,7 +197,7 @@ class SelfdriveD:
       self.big_model_ready_t = time.monotonic()
       self.events_sp.add(custom.OnroadEventSP.EventName.bigModelReady)
     self.big_model_loading = loading
-    if self.big_model_loading:
+    if self.big_model_loading or jetlink_proving_active():
       self.events.add(EventName.bigModelLoading)
 
     big_active = self.params.get("ChestnutActive")

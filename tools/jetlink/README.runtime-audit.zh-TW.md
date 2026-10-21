@@ -8,11 +8,21 @@ jetlink_repo/jetlink/openpilot/joining.py 與 sunnypilot/jetlink_adapter。
 | 項目 | 原本本分支 | 本次修正與限制 |
 | --- | --- | --- |
 | ready | daemon 的模型、連線與暖機就緒 | 不代表 modeld 已採用遠端輸出；Active 才是實際使用 |
-| 換入大模型 | 要求新鮮、停止、控制未啟用的訊息 | 另外要求 carControlSP.mads.enabled 為 false；與 zoompilot 一樣，暫停的 MADS 仍阻止切換。保留更嚴格的 standstill 條件 |
-| 遠端推論失敗 | 鎖存 commIssue、重設本機循環狀態，失敗當幀回傳 None | 參考 zoompilot，在相同當幀嘗試本機推論，避免僅因遠端失敗就缺少該幀輸出；關閉 socket 失敗不阻止本機恢復 |
-| 故障警示 | 要求停止、解除控制才能清除鎖存 | 保留；不假裝可繼續巡航，不隱藏 native model 錯誤，不停用任何 ACC / CAN / safety 警示 |
-| 本機暖機 | 小模型先完成至少三幀才可接入遠端 | 保留；回退循環狀態重設後重新累計，移動或 MADS 啟用時不重新接入 |
-| 遲到幀、證明期 | 與 zoompilot 不同 | 未移植 zoompilot 的 held frames、proving window、lag/drop 過濾重設與完整重試策略；不宣稱延遲或行車行為等同 zoompilot |
+| 換入大模型 | 需要停止且控制未啟用 | 現在要求新鮮有效的 carState/selfdriveState/carControl/carControlSP，巡航與 MADS 全部關閉；可在移動中重接已準備的 warp。首次 GPU warp 準備仍只在停車時執行 |
+| 遠端推論失敗 | 失敗當幀回傳 None | 同幀執行暖機過的本機模型；不隱藏本機推論錯誤 |
+| 短暫延遲 | 同步等待至 IPC 逾時 | 一次最多一個背景 IPC；正常幀總預算 46 ms，遲到時有限度沿用上一份輸出，不排隊累積相機幀。第一次無輸出可保留時維持原有 150 ms 上限 |
+| 延遲上限 | 無保留幀規則 | 連續 5 次或 10 秒內超過 20 次保留、輸出來源超過 200 ms、相機 frame_drop_ratio > 0.0075 時回退。不重用非有限或身分不符的輸出 |
+| 切入驗證 | 無 | 前 20 幀為 proving；前三幀容許暖機，其後證明期遇到保留幀即回退。bigModelLoading 的 NO_ENTRY 同時阻止巡航及 MADS 啟用；控制狀態意外改變也立即回退 |
+| 重試 | 固定 5 秒 | 前三次失敗各等 1 秒，之後 5/10/20/40/60 秒，上限 60 秒；成功持續超過 60 秒重設失敗次數。時間到仍須控制全關及本機完成三幀暖機 |
+| 故障警示 | 停車解除控制才清除 | 保留 commIssue 退出控制；本機三幀暖機完成且控制全關後才解除鎖存。證明期不清除鎖存，不停用 ACC/CAN/safety 警示 |
+
+來源：zoompilot/jetlink d24328d849b0e5154b55f149dc18c5dfe8bd79cc 的
+joining.py / model_state.py（MIT），以及 zoompilot/zoompilot 204f5295 的 Adapter.in_control。
+這是符合本分支 IPC 與 stock modeld 的移植，不是直接替換整套 zoompilot adapter。
+同一 USB 引擎仍存活時，推論延遲回退可在本次行程重試；USB 整個斷線、
+App 換模型或 USB 管理程序重建連線仍要求實際關閉點火，未放寬 USB 初始化限制。
+只在實際切換當幀重設掉幀濾波，不隱藏後續持續落後。
+軟體測試不代表已完成 C4/QCOM、Mac、iPhone/iPad 或實車驗證；不宣稱無縫維持巡航。
 
 ## paramsd 的另一個版本問題
 

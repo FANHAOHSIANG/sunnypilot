@@ -48,7 +48,9 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續
 
 支援符合契約的 queued/stateful 匯出；格式相容不等於每個模型已完成行車驗證。
 目前不宣稱 App 清單上的每個模型都能用。遠端失敗會鎖存 fault，透過既有
-commIssue 要求解除控制並回到本機模型；只有停車且控制未啟用才允許重新接入。
+commIssue 要求解除控制並回到本機模型；同一連線恢復後，巡航與 MADS 全關才允許重新接入，
+不再要求車速為零。首次相機 warp 準備仍需停車；實際 USB 斷線重建或換模型仍需關閉點火。
+採用有上限的保留幀、20 幀切入驗證及重試退避，細節見 [執行期比較](README.runtime-audit.zh-TW.md)。
 
 ## Cinque Terre V3
 
@@ -118,3 +120,4 @@ python tools/commaview/install.py --check
 ```
 
 關閉 Jetlink 後重啟，或切回已驗證的原分支，可恢復本機模型；不要在行駛中更新。
+

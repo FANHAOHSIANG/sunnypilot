@@ -1,4 +1,5 @@
-"""Model joins require fresh, stationary and disengaged vehicle state."""
+"""Fresh vehicle state and all controls disabled, as in zoompilot."""
+import math
 
 
 def may_join(now, messages, valid, received):
@@ -6,6 +7,6 @@ def may_join(now, messages, valid, received):
   if not all(valid.get(k, False) and 0 <= now - received.get(k, -1e6) < .25 for k in required):
     return False
   cs, sd, cc, cc_sp = (messages[k] for k in required)
-  return bool(cs.standstill and abs(cs.vEgo) < .01 and not sd.enabled and not sd.active
+  return bool(math.isfinite(cs.vEgo) and not sd.enabled and not sd.active
               and not cc.enabled and not cc.latActive and not cc.longActive
               and not cc_sp.mads.enabled)

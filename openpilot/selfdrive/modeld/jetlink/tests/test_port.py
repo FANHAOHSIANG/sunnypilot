@@ -51,9 +51,15 @@ class GateTests(unittest.TestCase):
         self.assertFalse(self.allowed())
         setattr(self.messages[channel], field, False)
 
-  def test_motion_and_false_standstill_block(self):
-    for standstill, speed in [(False, 0.), (True, .01), (True, -1.), (True, float('nan'))]:
-      self.messages['carState'] = SimpleNamespace(standstill=standstill, vEgo=speed)
+  def test_motion_allowed_only_with_all_controls_off(self):
+    self.messages['carState'] = SimpleNamespace(standstill=False, vEgo=25.)
+    self.assertTrue(self.allowed())
+    self.messages['carControl'].latActive = True
+    self.assertFalse(self.allowed())
+
+  def test_nonfinite_speed_blocks(self):
+    for speed in (float('nan'), float('inf')):
+      self.messages['carState'].vEgo = speed
       self.assertFalse(self.allowed())
 
   def test_enabled_but_paused_mads_prevents_model_switch(self):
@@ -255,7 +261,7 @@ class ModelTransitionTests(unittest.TestCase):
     self.assertEqual(self.adapter.small_runs, 4)
     self.assertFalse(self.fault.exists())
 
-  def test_never_connect_while_moving(self):
+  def test_never_connect_while_control_gate_closed(self):
     self.adapter.warp = Mock()
     self.adapter.ready = True
     self.adapter.small_runs = 4
@@ -306,7 +312,7 @@ class ModelTransitionTests(unittest.TestCase):
       self.adapter.run({}, {}, self.inputs)
     self.assertTrue(self.fault.exists())
 
-  def test_after_failure_moving_does_not_rejoin_or_clear_fault(self):
+  def test_after_failure_engaged_does_not_rejoin_or_clear_fault(self):
     self.adapter.warp = Mock(return_value=np.zeros(DEFAULT_SPEC.warped_shape, np.uint8))
     self.adapter.client = Mock()
     self.adapter.client.infer.side_effect = TimeoutError('no reply')
@@ -331,8 +337,9 @@ class ModelTransitionTests(unittest.TestCase):
     self.assertTrue(self.adapter.active)
     self.local.run.assert_not_called()
 
-  def test_fault_clears_only_with_fresh_stopped_disengaged_state(self):
+  def test_fault_clears_only_after_native_warmup_and_fresh_disengaged_state(self):
     self.fault.write_text('0')
+    self.adapter.small_runs = 3
     messages = {'carState': SimpleNamespace(standstill=True, vEgo=0.),
                 'selfdriveState': SimpleNamespace(enabled=False, active=False),
                 'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),

@@ -432,6 +432,7 @@ def main(demo=False):
     }
 
     if jetlink_model is not None:
+      jetlink_model.frame_drop_ratio = frame_drop_ratio
       jetlink_model.update(sm, meta_main)
 
     mt1 = time.perf_counter()
@@ -439,6 +440,7 @@ def main(demo=False):
       send_chestnut = (chestnut_state is not None and
                        run_count % round(ModelConstants.MODEL_RUN_FREQ / SERVICE_LIST['chestnutGpuState'].frequency) == 0)
       inference = jetlink_model if jetlink_model is not None else model
+      handovers_before = jetlink_model.handovers if jetlink_model is not None else 0
       model_output = inference.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
       if not model.chestnut:
@@ -452,6 +454,10 @@ def main(demo=False):
         chestnut_state.big = False
       run_count = 0
       model_output = None
+    if jetlink_model is not None and jetlink_model.handovers != handovers_before:
+      # zoompilot forgives the bounded handover stall, not ongoing lag.
+      frame_dropped_filter.x = 0.
+      frame_drop_ratio = 0.
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
 
