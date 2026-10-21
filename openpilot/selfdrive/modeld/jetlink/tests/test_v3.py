@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / 'tinygrad_repo'))
+from tinygrad import Tensor
 
 import test_port
 from jetlink.spec import ModelSpec

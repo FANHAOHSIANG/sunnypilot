@@ -223,12 +223,12 @@ class JoiningModel:
       self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
 
   def _reset_small(self):
-    from tinygrad.device import Buffer
     self.small.prev_desire[:] = 0
     for array in self.small.npy.values():
       array[:] = 0
     for name, tensor in self.small.input_queues.items():
       if name.endswith('_q') or name in getattr(self.small, 'state_pairs', {}):
+        from tinygrad.device import Buffer
         # HKG tinygrad 69fd4d3 has no Buffer.copyin(). Keep the existing
         # allocation: recurrent outputs and captured JITs alias these buffers.
         target = tensor._buffer()
