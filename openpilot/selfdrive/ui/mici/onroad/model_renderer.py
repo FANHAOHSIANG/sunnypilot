@@ -141,7 +141,8 @@ class ModelRenderer(Widget, ModelRendererSP):
     if ui_state.status != UIStatus.DISENGAGED:
       self._draw_lane_lines()
       self._draw_path(sm)
-      self.predicted_stop_marker.render(self._rect, self._path, sm, self._map_to_screen, self._path_offset_z)
+      self.predicted_stop_marker.render(self._rect, self._path, sm, self._map_to_screen, self._path_offset_z,
+                                        local_coordinates=True)
     else:
       self.predicted_stop_marker.reset()
 
@@ -326,7 +327,7 @@ class ModelRenderer(Widget, ModelRendererSP):
       if ui_state.rainbow_mode_style == 1:
         if (ui_state.status in (UIStatus.ENGAGED, UIStatus.LAT_ONLY) and
             self.blue_path.draw(self._rect, self._path, sm, ui_state.started_frame, self._map_to_screen, self._path_offset_z,
-                                local_coordinates=False)):
+                                local_coordinates=True)):
           return
       else:
         self.blue_path.reset()
@@ -357,6 +358,25 @@ class ModelRenderer(Widget, ModelRendererSP):
       return 0
     indices = np.where(pos_x_array <= path_height)[0]
     return indices[-1] if indices.size > 0 else 0
+
+  def _map_to_screen(self, in_x, in_y, in_z):
+    """Project to rect-local pixels, matching C4 path polygons.
+
+    HKG overlays share C3's callback interface, but C4 adds the viewport
+    origin at draw time. Use absolute coordinates only for clipping here.
+    """
+    point = np.array([in_x, in_y, in_z])
+    if not np.isfinite(point).all():
+      return None
+    pt = self._car_space_transform @ point
+    if not np.isfinite(pt).all() or abs(pt[2]) < 1e-6:
+      return None
+    x, y = pt[:2] / pt[2]
+    clip = self._clip_region
+    sx, sy = x + self._rect.x, y + self._rect.y
+    if clip is None or not (clip.x <= sx <= clip.x + clip.width and clip.y <= sy <= clip.y + clip.height):
+      return None
+    return (x, y)
 
   def _map_line_to_polygon(self, line: np.ndarray, y_off: float, z_off: float, max_idx: int, allow_invert: bool = True) -> np.ndarray:
     """Convert 3D line to 2D polygon for rendering."""

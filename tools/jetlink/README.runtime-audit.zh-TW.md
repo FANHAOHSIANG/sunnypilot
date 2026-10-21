@@ -47,3 +47,19 @@ Jetlink fault 另由 commIssue 警示。訊息名稱與時序不足以判定 ACC
     tmux capture-pane -p -J -S -10000 | grep -i -B 8 -A 20 -E 'Traceback|paramsd|Jetlink failed|accFaulted|cruiseMismatch|commIssue' | tail -n 240
 
 不要為了產生日誌而在道路重現故障。重新啟動後舊 tmux 紀錄可能已消失，需另外保留行車 qlog。
+
+## C4 啟用控制後 UI 退出（完整 swaglog 確認）
+
+0b0fc6c4d 的 swaglog.0000000234、237、247 各記錄一次相同的 UI crash：
+C4 ModelRenderer._render 傳入 self._map_to_screen 給停車標記，但合併後的
+C4 renderer 缺少該方法。這一行只在狀態不是 DISENGAGED 時執行；即使
+停車標記選項關閉，Python 仍先解析 callback，因此依然崩潰。
+這是直接的介面錯誤，不能把這三次 UI 退出解釋成 Jetlink 推論掉幀。
+
+補回 C4 投影 callback，使用現有 _car_space_transform。C4 的點為視窗內
+相對座標，繪製藍色路徑與停車標記時才加視窗原點；舊介面的絕對座標
+呼叫維持預設行為。沒有改動車輛控制、Panda safety 或 Jetlink 回退條件。
+
+六項無圖形視窗的回歸測試執行實際 _render/_draw_path 方法，覆蓋啟用控制、
+MADS、解除控制、無效投影與兩種座標的停車線一致性；另保留 13 項藍色
+路徑測試。這些測試隔離 raylib 初始化，不能取代 C4 真實畫面驗證。

@@ -23,7 +23,7 @@ class PredictedStopMarker:
     self._last_time: float | None = None
     self._saw_standstill = False
 
-  def render(self, rect: rl.Rectangle, path, sm, project, z_offset: float) -> None:
+  def render(self, rect: rl.Rectangle, path, sm, project, z_offset: float, *, local_coordinates=False) -> None:
     if not getattr(ui_state, "predicted_stop_marker", False):
       self.reset()
       return
@@ -57,10 +57,10 @@ class PredictedStopMarker:
       self.reset()
       return
 
-    self._draw_stop_bar(rect, path, self._distance, project, z_offset)
+    self._draw_stop_bar(rect, path, self._distance, project, z_offset, local_coordinates=local_coordinates)
 
   @staticmethod
-  def _draw_stop_bar(rect: rl.Rectangle, path, distance: float, project, z_offset: float) -> None:
+  def _draw_stop_bar(rect: rl.Rectangle, path, distance: float, project, z_offset: float, *, local_coordinates=False) -> None:
     raw = path.raw_points
     if len(raw) < 2 or not np.isfinite(raw).all():
       return
@@ -80,7 +80,8 @@ class PredictedStopMarker:
     if not min(left[:, 1].min(), right[:, 1].min()) <= center_y <= max(left[:, 1].max(), right[:, 1].max()):
       return
 
-    a, b = (np.asarray(p) for p in projected)
+    offset = np.array([rect.x, rect.y]) if local_coordinates else np.zeros(2)
+    a, b = (np.asarray(p) + offset for p in projected)
     if not all(rect.x <= p[0] <= rect.x + rect.width and rect.y <= p[1] <= rect.y + rect.height for p in (a, b)):
       return
 
