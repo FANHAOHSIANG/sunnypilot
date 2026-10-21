@@ -135,6 +135,7 @@ class JoiningModel:
     self.fallback_count = 0
     self.handover_at = 0.
     self.prepare_error = ''
+    self.recovery_error = ''
     self.inference_ms = 0.
     self.frame = 0
     self.reset = True
@@ -158,6 +159,8 @@ class JoiningModel:
     return self
 
   def _phase(self):
+    if self.recovery_error:
+      return 'local_failed'
     if self.prepare_error:
       return 'prepare_failed'
     if self.warp is None:
@@ -179,6 +182,7 @@ class JoiningModel:
     tmp = MODEL_STATUS.with_suffix('.tmp')
     tmp.write_text(json.dumps(dict(updated=now, state='active' if self.active else 'local',
                                   active=self.active, ready=self.ready, error=self.error,
+                                  recovery_error=self.recovery_error,
                                   phase=phase or self._phase(), handover_at=self.handover_at,
                                   inference_ms=self.inference_ms,
                                   failures=self.recovery.failures, held=self.recovery.consecutive,
@@ -219,12 +223,16 @@ class JoiningModel:
       self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
 
   def _reset_small(self):
+    from tinygrad.device import Buffer
     self.small.prev_desire[:] = 0
     for array in self.small.npy.values():
       array[:] = 0
     for name, tensor in self.small.input_queues.items():
       if name.endswith('_q') or name in getattr(self.small, 'state_pairs', {}):
-        tensor._buffer().copyin(memoryview(bytearray(tensor.numel() * tensor.dtype.itemsize)))
+        # HKG tinygrad 69fd4d3 has no Buffer.copyin(). Keep the existing
+        # allocation: recurrent outputs and captured JITs alias these buffers.
+        target = tensor._buffer()
+        target.copy_from(Buffer('NPY', target.nbytes, opaque=memoryview(bytearray(target.nbytes))))
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     from openpilot.common.swaglog import cloudlog
@@ -326,12 +334,14 @@ class JoiningModel:
         try:
           self._reset_small()
           result = self._run_local(bufs, transforms, retime_inputs(inputs, frame_smoothing, 0.), None)
-        except Exception:
+        except Exception as recovery_exc:
           # A reset failure is as fatal as a failed local inference. Never
           # announce recovery before a usable native result exists.
           self.fallback_until = 0.
+          self.recovery_error = f'{type(recovery_exc).__name__}: {recovery_exc}'
           FAULT.write_text(str(time.monotonic()))
           self._write_proving()
+          cloudlog.exception('Jetlink local recovery failed; modeld cannot continue')
           raise
         # Do not inject a synthetic commIssue just because the remote left.
         # The normal CAN, process, model freshness and localization checks
@@ -351,9 +361,11 @@ class JoiningModel:
         raise RuntimeError('Local model did not return an output')
       if any(not np.all(np.isfinite(value)) for value in result.values()):
         raise ValueError('Local model output not finite')
-    except Exception:
+    except Exception as exc:
       self.fallback_until = 0.
+      self.recovery_error = f'{type(exc).__name__}: {exc}'
       FAULT.write_text(str(time.monotonic()))
+      self._write_proving()
       raise
     self.small_runs += 1
     return result

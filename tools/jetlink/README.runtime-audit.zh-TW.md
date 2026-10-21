@@ -127,3 +127,19 @@ inference_ms 是 modeld 的遠端路徑本幀處理時間（含 warp 與 IPC 等
 沿用保留幀時不是新遠端結果的全程延遲，不能直接等同 App 引擎耗時。
 daemon ready 但 model status 缺少或過期時顯示 live modeld status unavailable，
 offroad 時 modeld 本來就不執行；ready 不是 active 的證據。
+
+## HKG tinygrad 接手狀態重設修正
+
+使用者紀錄中模型狀態停在開機後 63.859 秒，fatal fault 也在同一時間寫入，
+fallback_count=0；程序清單沒有 driving modeld。這不是已完成的小模型接手。
+該份篩選紀錄沒有最後 traceback，不能直接確認退出的唯一原因。
+
+程式檢查確認另一個可重現的介面錯誤：釘選 tinygrad 69fd4d3 的 Buffer
+沒有 copyin()，但遠端退出時 _reset_small() 仍使用它，會在歷史張量重設時
+拋出 AttributeError。改為從零填充的 NPY Buffer 使用 copy_from()，保留原本
+allocation 與 recurrent output/JIT 對狀態的 alias；不換張量、不忽略複製錯誤。
+
+測試使用該釘選版真正的 Tensor 與 Buffer，覆蓋 state_pairs、舊式 _q、
+非歷史輸入保持不變、同幀接手，以及複製失敗仍觸發 fatal fault。
+新增 recovery_error 與 local_failed phase，區分遠端失敗和本機恢復失敗。
+這些是 NPY/主機測試，不能代替 QCOM 直接記憶體存取與實車時序驗證。
