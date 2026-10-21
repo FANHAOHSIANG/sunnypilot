@@ -110,14 +110,14 @@ class SelectionTests(unittest.TestCase):
         prepare_selected(client, peer, lambda: True)
       client.ensure_engine.assert_not_called()
 
-  def test_ignition_on_prevents_model_setup(self):
+  def test_invalid_connection_state_prevents_model_setup(self):
     spec = graph()
     client = self.client(spec)
     with self.assertRaises(RuntimeError):
       prepare_selected(client, {'protocol': 3, 'loaded': spec.sha256}, lambda: False)
     client.ensure_engine.assert_not_called()
 
-  def test_ignition_started_during_setup_and_model_changed_both_rejected(self):
+  def test_invalid_state_during_setup_and_model_changed_both_rejected(self):
     spec = graph()
     client = self.client(spec)
     offroad = Mock(side_effect=[True, False])
@@ -244,3 +244,4 @@ class DaemonIpcTests(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+

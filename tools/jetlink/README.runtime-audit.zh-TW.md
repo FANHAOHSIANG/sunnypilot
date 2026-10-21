@@ -19,8 +19,8 @@ jetlink_repo/jetlink/openpilot/joining.py 與 sunnypilot/jetlink_adapter。
 來源：zoompilot/jetlink d24328d849b0e5154b55f149dc18c5dfe8bd79cc 的
 joining.py / model_state.py（MIT），以及 zoompilot/zoompilot 204f5295 的 Adapter.in_control。
 這是符合本分支 IPC 與 stock modeld 的移植，不是直接替換整套 zoompilot adapter。
-同一 USB 引擎仍存活時，推論延遲回退可在本次行程重試；USB 整個斷線、
-App 換模型或 USB 管理程序重建連線仍要求實際關閉點火，未放寬 USB 初始化限制。
+USB 引擎仍存活時可重試；整個 USB 斷線後也允許在行駛中背景重連，
+前提是有效且新鮮的硬體與車況訊息。不修改 IsOffroad 或線束點火訊號。
 只在實際切換當幀重設掉幀濾波，不隱藏後續持續落後。
 軟體測試不代表已完成 C4/QCOM、Mac、iPhone/iPad 或實車驗證；不宣稱無縫維持巡航。
 
@@ -63,3 +63,20 @@ C4 renderer 缺少該方法。這一行只在狀態不是 DISENGAGED 時執行�
 六項無圖形視窗的回歸測試執行實際 _render/_draw_path 方法，覆蓋啟用控制、
 MADS、解除控制、無效投影與兩種座標的停車線一致性；另保留 13 項藍色
 路徑測試。這些測試隔離 raylib 初始化，不能取代 C4 真實畫面驗證。
+
+## 背景連線與模型切入分離
+
+使用者確認整車關閉並等待後仍有 ignitionLine=True，原本所有 USB 重連
+只允許 ignition-off，導致搬回車上或 C4 重啟後無法恢復連線。
+
+現在真實 ignition-off 的原條件仍可建立連線；onroad 時則要求 deviceState、
+pandaStates 有效新鮮（1.5 秒內、非空 Panda），carState/selfdriveState/
+carControl/carControlSP 有效新鮮（0.25 秒內），且車速為有限值。背景 USB
+連線與 App 引擎準備不要求 P 檔、零車速或控制關閉，因為不會發布駕駛輸出。
+狀態資料失效時中止握手與暖機，不假造熄火或繞過 USB cleanup 的阻擋。
+
+modeld 的 may_join 與 20 幀 proving 完全保留：巡航或 MADS 啟用時不得
+換入大模型。大模型已運行後可以繼續巡航，點火訊號不會主動斷開它。
+首次 QCOM warp 準備仍只在停止且解除控制時進行；若 C4 在行駛中重啟，
+USB 可先恢復 ready，初次 GPU 準備仍需等安全停妥。這不是行駛中無縫
+熱切換，也不會在重新連線後自動替駕駛重新啟用巡航。

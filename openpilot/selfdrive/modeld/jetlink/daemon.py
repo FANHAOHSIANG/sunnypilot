@@ -105,7 +105,7 @@ class ModelChanged(RuntimeError):
 
 def require_selected(current, spec):
   if not isinstance(current, dict) or current.get('loaded') != spec.sha256:
-    raise ModelChanged('App model changed or did not report its identity; reconnect with ignition off')
+    raise ModelChanged('App model changed or did not report its identity; reconnect after vehicle state is available')
 
 
 def check_loaded(client, spec):
@@ -125,24 +125,24 @@ def infer_selected(client, spec, images, packed, frame, reset):
   return output
 
 
-def prepare_selected(client, peer, offroad):
+def prepare_selected(client, peer, setup_allowed):
   if not isinstance(peer, dict) or type(peer.get('protocol')) is not int or peer['protocol'] != 3:
     raise ValueError('Jetlink App protocol 3 is required')
   selected = peer.get('loaded')
   if not isinstance(selected, str) or re.fullmatch('[0-9a-f]{64}', selected) is None:
-    raise ValueError('Select and prepare a driving model in the Jetlink App, then reconnect with ignition off')
-  if not offroad():
-    raise RuntimeError('Turn ignition off before changing the Jetlink model')
+    raise ValueError('Select and prepare a driving model in the Jetlink App, then reconnect after vehicle state is available')
+  if not setup_allowed():
+    raise RuntimeError('Fresh vehicle state is required before preparing the Jetlink model')
   current = client.state()
   if not isinstance(current, dict) or current.get('loaded') != selected:
-    raise ModelChanged('App selection changed during handshake; reconnect offroad')
+    raise ModelChanged('App selection changed during handshake; reconnect after vehicle state is available')
   try:
     spec = validate_model_spec(client.ensure_engine(selected, SPEC.nbytes if selected == SPEC.sha256 else 0,
-                                                  frame_skip=4, build_timeout=30, should_stop=lambda: not offroad()))
+                                                  frame_skip=4, build_timeout=30, should_stop=lambda: not setup_allowed()))
     if spec.sha256 != selected:
       raise ModelChanged('The prepared engine does not match the App selection')
-    if not offroad():
-      raise RuntimeError('Ignition started during model preparation; reconnect offroad')
+    if not setup_allowed():
+      raise RuntimeError('Vehicle left the permitted setup state during model preparation')
     check_loaded(client, spec)
     return spec
   finally:
@@ -199,7 +199,7 @@ def serve_local(listener, client):
 def main():
   from openpilot.common.params import Params
   from openpilot.cereal import messaging
-  from openpilot.selfdrive.modeld.jetlink.ignition import ignition_off
+  from openpilot.selfdrive.modeld.jetlink.ignition import connection_allowed, CONNECTION_SERVICES
   from openpilot.selfdrive.modeld.helpers import chestnut_present
   from openpilot.sunnypilot.models.helpers import get_active_model_runner
   from openpilot.cereal import custom
@@ -211,7 +211,8 @@ def main():
   ios_mode = params.get_bool('JetlinkIOS')  # mode changes require a reboot
   ios_setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'ios-root.sh'
   ignition_sm = messaging.SubMaster(['deviceState', 'pandaStates'])
-  offroad = lambda: ignition_off(params, ignition_sm)
+  vehicle_sm = messaging.SubMaster(list(CONNECTION_SERVICES))
+  setup_allowed = lambda: connection_allowed(params, ignition_sm, vehicle_sm)
   lock = open('/dev/shm/sunnypilot-jetlink.lock', 'w')
   fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
   Path(SOCKET).unlink(missing_ok=True)
@@ -232,10 +233,10 @@ def main():
         publish('unsupported', error='Select the default small model and disconnect Chestnut before using Jetlink')
         time.sleep(1)
         continue
-      # Setup/re-enumeration and every engine handshake require actual ignition
-      # off, even if the UI has an always-offroad override.
-      if not offroad():
-        publish('waiting', error='Turn ignition off to connect the Jetlink App')
+      # Keep checking real vehicle messages throughout setup. IsOffroad alone
+      # never grants permission, including an always-offroad UI override.
+      if not setup_allowed():
+        publish('waiting', error='Waiting for fresh vehicle state before connecting Jetlink')
         time.sleep(1)
         continue
       if not host_attached():
@@ -263,20 +264,22 @@ def main():
           except Exception as exc:
             blocked = 'iOS USB initialization failed; reboot before retrying: ' + str(exc)[:220]
             raise
-          transport = accept_phone(offroad, host_attached, publish)
+          transport = accept_phone(setup_allowed, host_attached, publish)
         else:
           setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'setup_gadget.sh'
           root_command(['bash', str(setup)])
           transport = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
+        if not setup_allowed():
+          raise RuntimeError('Vehicle left the permitted setup state during USB setup')
         transport.protocol_version = 3
         client = JetlinkClient(transport, name='sunnypilot-jetlink-ios' if ios_mode else 'sunnypilot-jetlink')
         peer = client.hello()
         if (Path('/sys/class/udc') / udc / 'current_speed').read_text().strip() not in ('super-speed', 'super-speed-plus'):
           raise ValueError('This port requires a USB 3 data cable at SuperSpeed')
-        spec = prepare_selected(client, peer, offroad)
+        spec = prepare_selected(client, peer, setup_allowed)
         for frame in range(3):
-          if not offroad():
-            raise RuntimeError('Ignition started during warmup; reconnect offroad')
+          if not setup_allowed():
+            raise RuntimeError('Vehicle left the permitted setup state during warmup')
           infer_selected(client, spec, np.zeros(spec.warped_shape, np.uint8),
                          np.zeros(spec.packed_nelem, np.float32), frame, True)
         serve_local(listener, client)
@@ -309,3 +312,4 @@ def main():
 
 if __name__ == '__main__':
   main()
+

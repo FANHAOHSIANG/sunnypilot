@@ -83,10 +83,10 @@ class CableTests(unittest.TestCase):
     if errors:
       raise errors[0]
 
-  def test_listener_binds_only_cable_and_stops_on_ignition(self):
+  def test_listener_binds_only_cable_and_stops_on_invalid_state(self):
     listener = Mock()
     with patch.object(cable.TcpTransport, "listen", return_value=listener) as listen:
-      with self.assertRaisesRegex(RuntimeError, "ignition off"):
+      with self.assertRaisesRegex(RuntimeError, "Fresh vehicle state"):
         cable.accept_phone(lambda: False, lambda: True, Mock())
     listen.assert_called_once_with("192.168.60.1", 5599)
     listener.close.assert_called_once()
@@ -99,11 +99,11 @@ class CableTests(unittest.TestCase):
         cable.accept_phone(lambda: True, lambda: False, Mock())
     listener.close.assert_called_once()
 
-  def test_ignition_changes_during_accept_close_peer(self):
+  def test_state_becomes_invalid_during_accept_close_peer(self):
     listener, sock = Mock(), Mock()
     listener.accept.return_value = (sock, ("192.168.60.2", 1))
     with patch.object(cable.TcpTransport, "listen", return_value=listener):
-      with self.assertRaisesRegex(RuntimeError, "Ignition started"):
+      with self.assertRaisesRegex(RuntimeError, "Vehicle left the permitted setup state"):
         cable.accept_phone(Mock(side_effect=[True, False]), lambda: True, Mock())
     sock.close.assert_called_once()
     listener.close.assert_called_once()
@@ -135,7 +135,7 @@ class CableTests(unittest.TestCase):
   def test_daemon_keeps_bulk_owner_separate_from_phone_socket(self):
     source = (Path(__file__).resolve().parents[1] / "daemon.py").read_text()
     self.assertIn("ios_gadget.ensure(", source)
-    self.assertIn("transport = accept_phone(offroad, host_attached, publish)", source)
+    self.assertIn("transport = accept_phone(setup_allowed, host_attached, publish)", source)
     self.assertIn("cleanup(ios_gadget.owner)", source)
     self.assertNotIn("['bash', str(ios_setup), 'teardown']", source)
 
@@ -221,3 +221,4 @@ class FrameIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
   unittest.main()
+

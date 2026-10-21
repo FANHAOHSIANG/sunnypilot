@@ -37,11 +37,11 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續
 
 1. 開啟 Jetlink 時自動使用 **內建 Small Model / stock runner** 作後備；保存原本本機模型選擇，關閉並重新啟動後恢復。
 2. 開啟 **Jetlink → Mac / Jetson**，重新啟動 C4。
-3. 停車、解除控制、實際關閉點火，再建立 USB 3 連線。
+3. 建議出發前接好 USB 3；點火開啟或行駛中也可背景建立連線，不需要搬下 C4 或熄火。
 4. Mac 的 protocol-3 Jetlink App 選模型並準備完成，C4 讀取實際 loaded SHA256。
 5. 使用真實 ModelSpec 檢查輸入、輸出切片、大小與模型身分。ready 代表 daemon
    就緒；只有 **Active — 模型名稱** 才代表 modeld 正使用 Mac 結果。
-6. 換模型時再次停車、解除控制、關閉點火，待 App 載入完成再重新連線。
+6. 請在停妥後操作 App 換模型。模型身分改變會終止原推論；新模型連線就緒後，仍須巡航與 MADS 全關才可切入，通過 20 幀驗證後才允許啟用控制。
 
 仍不支援：自訂本機 modeld_v2/split/multi-policy runner、Chestnut 與 Mac
 同時使用、Jetlink HUD/地圖/導航影像通道。
@@ -49,7 +49,8 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續
 支援符合契約的 queued/stateful 匯出；格式相容不等於每個模型已完成行車驗證。
 目前不宣稱 App 清單上的每個模型都能用。遠端失敗會鎖存 fault，透過既有
 commIssue 要求解除控制並回到本機模型；同一連線恢復後，巡航與 MADS 全關才允許重新接入，
-不再要求車速為零。首次相機 warp 準備仍需停車；實際 USB 斷線重建或換模型仍需關閉點火。
+不再要求車速為零。首次相機 warp 準備仍需停車；USB 重連與引擎背景準備不再要求關閉點火。
+背景 ready 不代表切入；已啟用巡航或 MADS 時不會自動把小模型換成大模型。
 採用有上限的保留幀、20 幀切入驗證及重試退避，細節見 [執行期比較](README.runtime-audit.zh-TW.md)。
 
 ## Cinque Terre V3

@@ -115,7 +115,7 @@ class ModelsLayoutMici(NavScroller):
     ui_state.params.put_bool("JetlinkEnabled", enabled, block=True)
     self._pop_to_main()
     gui_app.push_widget(BigDialog(title="Restart required",
-                                  description="Restart C4 to apply. For Jetlink, select the default small model and connect with ignition off."))
+                                  description="Restart C4 to apply. Jetlink can connect in the background. Disable cruise and MADS to switch into the big model."))
 
   @property
   def model_manager(self):
@@ -279,3 +279,4 @@ class ModelsLayoutMici(NavScroller):
     elif manager.selectedBundle and manager.selectedBundle.status == custom.ModelManagerSP.DownloadStatus.downloaded:
       self.current_model_info.info_header.set_text(tr("downloaded"))
       self.current_model_info.info_text.set_text(tr("downloaded"))
+

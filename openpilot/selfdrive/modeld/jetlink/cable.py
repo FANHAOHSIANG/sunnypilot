@@ -41,7 +41,7 @@ class CableTransport(TcpTransport):
       pass
     super().close()
 
-def accept_phone(offroad, present, announce, timeout=60.0):
+def accept_phone(setup_allowed, present, announce, timeout=60.0):
   """The phone's server dials us; we remain the wire client after accepting."""
   listener = TcpTransport.listen(ADDRESS, PORT)
   listener.settimeout(.25)
@@ -52,17 +52,17 @@ def accept_phone(offroad, present, announce, timeout=60.0):
       if time.monotonic() - last_announce >= 1:
         announce("waiting", error="Open Jetlink on your iPhone/iPad, allow Local Network and keep the app on screen")
         last_announce = time.monotonic()
-      if not offroad():
-        raise RuntimeError("Turn ignition off before connecting iPhone/iPad")
+      if not setup_allowed():
+        raise RuntimeError("Fresh vehicle state is required before connecting iPhone/iPad")
       if not present():
         raise ConnectionError("USB host disconnected")
       try:
         sock, _ = listener.accept()
       except TimeoutError:
         continue
-      if not offroad():
+      if not setup_allowed():
         sock.close()
-        raise RuntimeError("Ignition started while iPhone/iPad connected")
+        raise RuntimeError("Vehicle left the permitted setup state while iPhone/iPad connected")
       if not cable_peer(sock.getsockname(), sock.getpeername()):
         sock.close()
         continue
@@ -95,3 +95,4 @@ class PersistentIOSGadget:
     except Exception as exc:
       self.failed = str(exc)
       raise
+
