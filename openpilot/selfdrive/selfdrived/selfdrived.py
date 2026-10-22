@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from openpilot.common.jetlink_status import fault_active as jetlink_fault_active
 import os
 import time
 import threading
@@ -395,6 +396,9 @@ class SelfdriveD:
     # Order is very intentional here. Be careful when modifying this.
     # All events here should at least have NO_ENTRY and SOFT_DISABLE.
     num_events = len(self.events)
+
+    if jetlink_fault_active():
+      self.events.add(EventName.commIssue)
 
     if self.big_model_active and big_failed:
       self.events.add(EventName.bigModelFailed)

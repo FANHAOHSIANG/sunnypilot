@@ -52,6 +52,12 @@ class TogglesLayout(Widget):
         "chffr_wheel.png",
         True,
       ),
+      "JetlinkEnabled": (
+        lambda: tr("Jetlink Mac (Experimental)"),
+        "Run a compatible App-selected model on your Mac over USB 3. Select the default small model first. Reboot after changing this setting.",
+        "chffr_wheel.png",
+        True,
+      ),
       "DisengageOnAccelerator": (
         lambda: tr("Disengage on Accelerator Pedal"),
         DESCRIPTIONS["DisengageOnAccelerator"],
@@ -174,6 +180,7 @@ class TogglesLayout(Widget):
     for toggle_def in self._toggle_defs:
       if self._toggle_defs[toggle_def][3] and toggle_def not in self._locked_toggles:
         self._toggles[toggle_def].action_item.set_enabled(not ui_state.engaged)
+    self._toggles["JetlinkEnabled"].action_item.set_enabled(not ui_state.started)
 
   def _render(self, rect):
     self._scroller.render(rect)
