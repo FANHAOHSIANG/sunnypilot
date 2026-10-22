@@ -6,7 +6,9 @@ the controller unbound: a new borrower must never race a stranded USB read.
 """
 import json
 import logging
+from pathlib import Path
 import socket
+import struct
 import threading
 import time
 
@@ -34,11 +36,38 @@ def read_packet(sock):
   return value
 
 
+def process_identity(pid):
+  """Linux start tick + state; a reused PID must not own an old lease."""
+  try:
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return fields[19], fields[0]  # fields 22 (starttime) and 3 (state)
+  except FileNotFoundError:
+    return None
+
+
+def wait_peer_exit(pid, identity, timeout=2.):
+  if identity is None:
+    return False
+  until = time.monotonic() + timeout
+  while True:
+    try:
+      current = process_identity(pid)
+    except (OSError, ValueError, IndexError):
+      return False  # An unreadable identity is not evidence of closed FDs.
+    if current is None or current[0] != identity[0] or current[1] in ('Z', 'X'):
+      return True
+    if time.monotonic() >= until:
+      return False
+    time.sleep(.02)
+
+
 def serve_lease(connection, owner, spec, publish):
   """One authenticated (0600 local socket) borrower until clean release."""
   clean = False
   dropped = False
   granted = False
+  pid, _, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+  identity = process_identity(pid)
   connection.settimeout(LEASE_TIMEOUT)
   try:
     if read_packet(connection) != {'op': 'borrow', 'version': 1}:
@@ -73,8 +102,18 @@ def serve_lease(connection, owner, spec, publish):
         return
   finally:
     if granted and not clean:
-      owner.failed = 'USB borrower left without confirming endpoint cleanup; reboot required'
-      owner.drop()
+      # Manager stops modeld when ignition goes off. EOF alone is not enough:
+      # wait for that process to exit (or become a zombie, with FDs released)
+      # before rebinding. A live/D-state process cannot safely lend endpoints.
+      try:
+        owner.drop()
+        if wait_peer_exit(pid, identity):
+          owner.restore()
+        else:
+          owner.failed = 'USB borrower left without confirming endpoint cleanup; reboot required'
+      except Exception as exc:
+        owner.failed = 'USB lease cleanup failed; reboot required: ' + str(exc)
+        raise
 
 
 def serve_mac(listener, client, transport, owner, publish, attached):

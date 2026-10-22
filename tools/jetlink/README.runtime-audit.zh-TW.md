@@ -230,8 +230,10 @@ contract，避免把 offroad 的 ready 當成新連線仍然有效。Mac App 須
 
 退回小模型時，端點清理在背景進行，不讓相機迴圈等待 USB 解除綁定。
 只有接獲資料端點已關閉、reader 已結束、AIO 清理完成的確認，owner 才
-重新綁定。借用程序意外消失或清理失敗會保持未綁定並要求重開 C4，
-避免兩個程序同時讀端點。這是本分支的精簡 lease，並非完整照搬上游
+重新綁定。熄火時 manager 結束 modeld，owner 透過本機 socket 的 peer PID
+及 Linux process starttime 確認該程序已退出後回收使用權；避免 PID 重用。
+若斷開控制連線的程序仍存活、卡在 D-state 或無法確認清理完成，保持
+未綁定並要求重開 C4，避免兩個程序同時讀端點。這是本分支的精簡 lease，並非完整照搬上游
 provision/Owner；正常回退也會重新列舉，不宣稱完全無縫重連。
 
 影像 warp 拆為 start/wait，先提交 GPU 工作，再處理晚到回覆與 CPU 輸入，

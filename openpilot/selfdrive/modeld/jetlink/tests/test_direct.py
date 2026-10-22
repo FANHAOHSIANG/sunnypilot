@@ -14,6 +14,9 @@ from openpilot.selfdrive.modeld.jetlink.contracts import DEFAULT_SPEC
 
 class LeaseTests(unittest.TestCase):
   def setUp(self):
+    ctx = patch.object(direct, 'wait_peer_exit', return_value=False)
+    self.wait_exit = ctx.start()
+    self.addCleanup(ctx.stop)
     self.events = []
     self.owner = SimpleNamespace(session=None, failed=None, udc='udc',
                                  owner=SimpleNamespace(mount='/dev/fake', gadget='/config/fake', lendable=True),
@@ -65,6 +68,22 @@ class LeaseTests(unittest.TestCase):
     self.assertEqual(self.events, ['drop'])
     self.assertIn('cleanup', self.owner.failed)
 
+  def test_modeld_process_exit_reclaims_lease_for_next_ignition(self):
+    self.wait_exit.return_value = True
+    self.borrow()
+    self.client.close()
+    self.finish()
+    self.assertEqual(self.events, ['drop', 'restore'])
+    self.assertIsNone(self.owner.failed)
+
+  def test_unbind_failure_blocks_reuse(self):
+    self.borrow()
+    self.owner.drop = Mock(side_effect=RuntimeError('unbind failed'))
+    self.client.close()
+    self.finish()
+    self.assertIn('unbind failed', self.owner.failed)
+    self.assertNotIn('restore', self.events)
+
   def test_release_without_dropping_cannot_rebind(self):
     self.borrow()
     direct.packet(self.client, {'op': 'release', 'clean': True})
@@ -89,6 +108,13 @@ class LeaseTests(unittest.TestCase):
 
 class DirectClientTests(unittest.TestCase):
   def connect(self, peer=None, speed='super-speed'):
+    self.cleanup_done = threading.Event()
+    cleanup = direct.DirectClient._cleanup
+    def cleanup_and_signal(client):
+      try:
+        cleanup(client)
+      finally:
+        self.cleanup_done.set()
     server, client = socket.socketpair()
     self.addCleanup(server.close)
     self.addCleanup(client.close)
@@ -118,6 +144,8 @@ class DirectClientTests(unittest.TestCase):
       return self.output
     self.remote.infer.side_effect = infer
     for ctx in (patch.object(direct.socket, 'socket', return_value=connected),
+                patch.object(direct.DirectClient, '_cleanup', cleanup_and_signal),
+                patch.object(direct, 'wait_peer_exit', return_value=False),
                 patch.object(direct.FfsTransport, 'borrowed', return_value=self.t),
                 patch.object(direct, 'JetlinkClient', return_value=self.remote),
                 patch.object(daemon, 'prepare_selected', return_value=DEFAULT_SPEC),
@@ -162,7 +190,8 @@ class DirectClientTests(unittest.TestCase):
   def test_failed_cleanup_does_not_offer_endpoints_again(self):
     c = self.connect()
     self.t.cleanup_incomplete = True
-    self.finish(c)
+    with self.assertLogs(direct.log, level='ERROR'):
+      self.finish(c)
     self.assertNotIn('restore', self.events)
     self.assertIsNotNone(self.owner.failed)
 
@@ -179,6 +208,7 @@ class DirectClientTests(unittest.TestCase):
   def test_model_changed_during_handoff_releases_lease(self):
     with self.assertRaisesRegex(ValueError, 'model changed'):
       self.connect(peer={'loaded': '0' * 64})
+    self.assertTrue(self.cleanup_done.wait(2.))
     self.thread.join(2.)
     self.assertFalse(self.thread.is_alive())
     self.assertEqual(self.events, ['drop', 'close', 'restore'])
@@ -186,12 +216,31 @@ class DirectClientTests(unittest.TestCase):
   def test_usb2_after_handoff_releases_lease(self):
     with self.assertRaisesRegex(ValueError, 'SuperSpeed'):
       self.connect(speed='high-speed')
+    self.assertTrue(self.cleanup_done.wait(2.))
     self.thread.join(2.)
     self.assertFalse(self.thread.is_alive())
     self.assertEqual(self.events, ['drop', 'close', 'restore'])
 
 
 class ClientSelectionTests(unittest.TestCase):
+  def test_peer_reuse_and_zombie_release_but_live_or_uninterruptible_do_not(self):
+    for current, expected in ((None, True), (('new', 'S'), True), (('old', 'Z'), True),
+                              (('old', 'S'), False), (('old', 'D'), False)):
+      with self.subTest(current=current), patch.object(direct, 'process_identity', return_value=current):
+        self.assertEqual(direct.wait_peer_exit(123, ('old', 'S'), timeout=0), expected)
+
+  def test_process_stat_parses_start_tick_after_command_with_parentheses(self):
+    stat = '123 (modeld (worker)) S ' + ' '.join(str(i) for i in range(4, 23))
+    with patch.object(direct.Path, 'read_text', return_value=stat):
+      self.assertEqual(direct.process_identity(123), ('22', 'S'))
+    with patch.object(direct.Path, 'read_text', side_effect=FileNotFoundError):
+      self.assertIsNone(direct.process_identity(123))
+
+  def test_unreadable_peer_identity_does_not_allow_endpoint_reuse(self):
+    for error in (PermissionError(), IndexError(), ValueError()):
+      with self.subTest(error=error), patch.object(direct, 'process_identity', side_effect=error):
+        self.assertFalse(direct.wait_peer_exit(123, ('old', 'S'), timeout=0))
+
   def test_only_advertised_mac_direct_path_uses_lease(self):
     for mode, wanted in (('usb-direct', True), (None, False)):
       with self.subTest(mode=mode), patch.object(link, 'state', return_value={'transport': mode}), \

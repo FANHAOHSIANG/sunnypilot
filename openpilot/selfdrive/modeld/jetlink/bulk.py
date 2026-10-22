@@ -1,8 +1,9 @@
 """Resident ep0 ownership for Mac USB, with one borrowed data session.
 
 Uses upstream FfsTransport.borrowed: ep0 and configfs outlive a session.
-The existing daemon lock is the ownership lease in this integration. There
-is no second process opening endpoints or forwarding USB descriptors.
+The daemon lock owns ep0. Its idle data session is closed before direct.py
+grants modeld an exclusive lease to open the data endpoints; cleanup must
+finish before the daemon can use them again. USB descriptors are not forwarded.
 """
 from pathlib import Path
 import time
