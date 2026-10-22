@@ -1,7 +1,7 @@
 """USB bulk owner; no USB setup or model loading on modeld's realtime thread.
 
-This port uses protocol 3, a compatible preloaded App-selected engine, and no HUD,
-navigation or Wi-Fi provisioning. iOS mode uses only a USB NCM network.
+This port uses protocol 3 and a compatible preloaded App-selected engine.
+Mac HUD is opt-in and display-only; iOS mode uses only a USB NCM network.
 """
 import fcntl
 import json
@@ -24,6 +24,7 @@ from jetlink.transport.ffs import FfsTransport
 from openpilot.selfdrive.modeld.jetlink.cable import accept_phone, PersistentIOSGadget, wait_retry
 from openpilot.selfdrive.modeld.jetlink.bulk import PersistentBulkGadget
 from openpilot.selfdrive.modeld.jetlink.direct import serve_mac
+from openpilot.selfdrive.modeld.jetlink.hud import HudSession
 
 GADGET = '/sys/kernel/config/usb_gadget/jetlink'
 USB_DATA_ROLE = Path('/sys/class/usbpd/usbpd0/current_dr')
@@ -322,7 +323,8 @@ def main():
         if ios_mode:
           serve_local(listener, client)
         else:
-          serve_mac(listener, client, transport, bulk_gadget, publish, host_attached)
+          with HudSession(peer) as hud:
+            serve_mac(listener, client, transport, bulk_gadget, publish, host_attached, hud=hud)
       except UnsafeCleanupError as exc:
         blocked = str(exc)[:300]
         publish('blocked', error=blocked)
@@ -362,3 +364,4 @@ def main():
 
 if __name__ == '__main__':
   main()
+

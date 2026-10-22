@@ -129,6 +129,7 @@ class PipelineTests(unittest.TestCase):
     direct._io_lock = threading.Lock()
     direct._verified_frame = None
     direct.output_at, direct.sent = 0., False
+    direct.hud = None
     return direct
 
   def test_direct_send_then_health_callback_then_wait_without_worker_copy(self):
@@ -151,6 +152,22 @@ class PipelineTests(unittest.TestCase):
     self.assertIsNotNone(direct.take_ready())
     self.assertEqual(direct.output_at, 10.)
     self.assertEqual(self.client.output_frame, 1)
+
+  def test_hud_extension_between_frames_does_not_consume_model_replies(self):
+    from openpilot.selfdrive.modeld.jetlink.hud import HudSender, MESSAGE
+    direct = self.direct()
+    direct.hud = HudSender({})
+    self.addCleanup(direct.hud.close)
+    direct.hud.latest = (10., b'{"source":"hkg_hud_v1"}')
+    self.wire.reply(1, 1)
+    self.assertIsNotNone(direct.infer_frame(self.image, self.packed, 1, True, 10.046))
+    self.assertEqual([(kind, seq) for kind, seq, _ in self.wire.sent], [(P.Msg.INFER_REQ, 1), (MESSAGE, 2)])
+    # There is intentionally no HUD acknowledgement in the receive queue.
+    self.clock.return_value = 10.05
+    self.wire.reply(3, 2, value=2.)
+    output = direct.infer_frame(self.image, self.packed, 2, False, 10.096)
+    self.assertEqual(output[0], 2.)
+    self.assertEqual(self.client.pending, deque())
 
   def test_legacy_telemetry_identity_query_has_remaining_hard_budget(self):
     direct = self.direct()
@@ -177,3 +194,4 @@ class PipelineTests(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+

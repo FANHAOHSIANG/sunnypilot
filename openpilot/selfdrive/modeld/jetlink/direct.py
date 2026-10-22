@@ -20,6 +20,7 @@ from openpilot.selfdrive.modeld.jetlink.pipeline import PipelineClient as Jetlin
 from jetlink.spec import ModelSpec
 from jetlink.transport.ffs import FfsTransport
 from jetlink.transport.priority import background_thread
+from openpilot.selfdrive.modeld.jetlink.hud import HudSender
 
 log = logging.getLogger('sunnypilot.jetlink.direct')
 LEASE_TIMEOUT = 5.
@@ -120,7 +121,7 @@ def serve_lease(connection, owner, spec, publish):
         raise
 
 
-def serve_mac(listener, client, transport, owner, publish, attached):
+def serve_mac(listener, client, transport, owner, publish, attached, hud=None):
   """Idle readiness belongs to jetlinkd; live inference belongs to modeld."""
   spec = validate_model_spec(client.spec)
   ping_at = 0.
@@ -133,6 +134,8 @@ def serve_mac(listener, client, transport, owner, publish, attached):
         from openpilot.selfdrive.modeld.jetlink.daemon import check_loaded
         check_loaded(client, spec)
         ping_at = time.monotonic() + 2.
+      if hud is not None:
+        hud.send(client)
       continue
     with connection:
       # Finish the daemon's reader and AIO before granting modeld endpoints.
@@ -153,6 +156,7 @@ class DirectClient:
     self.sent = False
     self._verified_frame = None
     self.transport = None
+    self.hud = None
     self._io_lock = threading.Lock()
     self._rpc_lock = threading.Lock()
     self._closed = threading.Event()
@@ -179,6 +183,7 @@ class DirectClient:
       selected = prepare_selected(self.client, peer, lambda: not self._closed.is_set())
       if selected.to_dict() != self.spec.to_dict():
         raise ValueError('Model contract changed during USB handoff')
+      self.hud = HudSender(peer)
     except BaseException:
       self.close()
       raise
@@ -265,7 +270,15 @@ class DirectClient:
           return None
         hold = max(0., deadline - time.monotonic()) if self.client.last_output is not None else None
         output = self.client.infer_end(seq, hold=hold)
-        return self._verified_output() if output is not None else None
+        verified = self._verified_output() if output is not None else None
+        if verified is not None and self.hud is not None:
+          # Preserve inference's send diagnostics; HUD has its own counters.
+          model_send = self.client.t.last_send
+          try:
+            self.hud.send(self.client, deadline=deadline)
+          finally:
+            self.client.t.last_send = model_send
+        return verified
       finally:
         self.metrics = dict(frame=frame, output_frame=self.client.output_frame,
                             pending=len(self.client.pending), sent=self.sent,
@@ -284,6 +297,8 @@ class DirectClient:
       background_thread()
       # Wait outside the camera loop for its bounded outstanding exchange.
       with self._io_lock:
+        if self.hud is not None:
+          self.hud.close()
         if self.transport is not None:
           self._rpc('drop')  # cancels outstanding kernel reads/writes
           self.transport._closing = True
@@ -299,3 +314,4 @@ class DirectClient:
     finally:
       self.control.close()
       self.cleaned.set()
+

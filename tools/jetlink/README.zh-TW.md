@@ -1,5 +1,8 @@
 # hkg-enhanced + Jetlink (Mac / iPhone / iPad) / Cinque Terre V3
 
+本 `hkg-enhanced-jetlink-hud` 測試分支新增預設關閉的 Mac 行車 HUD 移植。
+配對版本、安裝與還原見 [HUD 測試說明](README.hud.zh-TW.md)。實機畫面與推論延遲尚待驗證。
+
 本分支 `hkg-enhanced-jetlink` 直接建立在 TonyBinheWu/sunnypilot **hkg-enhanced**
 `d648262a015dfba1d8391d935c7fa93ea8214561`（2026-10-20）。
 另已完整合併官方 sunnypilot master `922513f3128b00611d695ce465989a9bc8af9d59`，
@@ -44,7 +47,7 @@ push CI 防止再次配錯。此修正已核對宣告與呼叫；使用者後續
 6. 請在停妥後操作 App 換模型。模型身分改變會終止原推論；新模型連線就緒後，仍須巡航與 MADS 全關才可切入，通過 20 幀驗證後才允許啟用控制。
 
 仍不支援：自訂本機 modeld_v2/split/multi-policy runner、Chestnut 與 Mac
-同時使用、Jetlink HUD/地圖/導航影像通道。
+同時使用、Jetlink 地圖/導航影像通道。Mac 基礎行車 HUD 僅在本測試分支提供。
 
 支援符合契約的 queued/stateful 匯出；格式相容不等於每個模型已完成行車驗證。
 目前不宣稱 App 清單上的每個模型都能用。遠端失敗時，嘗試同幀由小模型接手；
@@ -123,4 +126,5 @@ python tools/commaview/install.py --check
 ```
 
 關閉 Jetlink 後重啟，或切回已驗證的原分支，可恢復本機模型；不要在行駛中更新。
+
 
