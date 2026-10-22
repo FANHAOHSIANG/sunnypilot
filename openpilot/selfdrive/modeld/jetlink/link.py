@@ -166,7 +166,11 @@ class ClientConnection:
     try:
       # Match zoompilot: drop realtime AND leave the frame loop's CPU pin.
       background_thread()
-      client = AsyncClient(Client())
+      if state().get('transport') == 'usb-direct':
+        from openpilot.selfdrive.modeld.jetlink.direct import DirectClient
+        client = AsyncClient(DirectClient())
+      else:
+        client = AsyncClient(Client())
       future.set_result(client)
     except InvalidStateError:
       if client is not None:

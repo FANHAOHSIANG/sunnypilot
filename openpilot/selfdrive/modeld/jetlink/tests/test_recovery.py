@@ -186,6 +186,32 @@ class AsyncTests(unittest.TestCase):
 class ModelRecoveryTests(unittest.TestCase):
   setUp = test_port.ModelTransitionTests.setUp
 
+  def test_warp_starts_before_drain_and_waits_before_usb_submission(self):
+    a = self.adapter
+    order = []
+    image = np.zeros(test_port.DEFAULT_SPEC.warped_shape, np.uint8)
+    a.warp = SimpleNamespace(start=lambda *args: order.append('start'),
+                             wait=lambda: (order.append('wait') or image))
+    wire = SimpleNamespace(spec=test_port.DEFAULT_SPEC, timeout=.15, infer=Mock(), close=Mock(), metrics={'frame': 1})
+    c = AsyncClient(wire)
+    self.addCleanup(c.close)
+    def drain():
+      order.append('drain')
+      return None
+    def infer(img, *args, deadline):
+      self.assertIs(img, image)
+      self.assertAlmostEqual(deadline, 10.046)
+      order.append('send')
+      c.output_at = 10.
+      return np.zeros(test_port.DEFAULT_SPEC.output_nelem, np.float32)
+    c.take_ready, c.infer = drain, infer
+    a.client = c
+    a.join_allowed = True
+    with patch.object(model.time, 'monotonic', return_value=10.):
+      self.assertIn('plan', a.run({}, {}, self.inputs))
+    self.assertEqual(order, ['start', 'drain', 'wait', 'send'])
+    self.assertEqual(a.last_frame['usb_direct'], {'frame': 1})
+
   def remote(self):
     self.adapter.warp = Mock(return_value=np.zeros(test_port.DEFAULT_SPEC.warped_shape, np.uint8))
     self.adapter.client = Mock()

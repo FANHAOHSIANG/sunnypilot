@@ -83,6 +83,10 @@ class Warp:
         raise ValueError('prepared Jetlink warp serialization changed pixels')
 
   def __call__(self, bufs, transforms):
+    self.start(bufs, transforms)
+    return self.wait()
+
+  def start(self, bufs, transforms):
     from tinygrad import Tensor
     started = time.monotonic()
     frames = {}
@@ -99,9 +103,13 @@ class Warp:
     self.transforms['tfm'][:] = transforms['img']
     self.transforms['big_tfm'][:] = transforms['big_img']
     prepared = time.monotonic()
-    result = self.run_warp(**self.inputs, **frames)
+    self._output = self.run_warp(**self.inputs, **frames)
     submitted = time.monotonic()
-    output = result.numpy()
+    self._times = (started, prepared, submitted)
+
+  def wait(self):
+    output = self._output.numpy()
+    started, prepared, submitted = self._times
     self.timings = (prepared - started, submitted - prepared, time.monotonic() - submitted)
     return output
 
@@ -272,6 +280,9 @@ class JoiningModel:
         if self.active and self.frame_drop_ratio > DROP_LIMIT:
           raise TimeoutError('Jetlink camera frame drop ratio exceeded')
         started = time.monotonic()
+        split_warp = hasattr(self.warp, 'start')
+        if split_warp:
+          self.warp.start(bufs, transforms)
         completed = None
         self.last_frame = dict(proving_frame=self.recovery.frames + 1)
         if isinstance(self.client, AsyncClient):
@@ -287,7 +298,7 @@ class JoiningModel:
         for name in ('traffic_convention', 'action_t'):
           self.views[name][:] = remote_inputs[name]
         self.frame = (self.frame + 1) & 0xFFFFFFFF
-        images = self.warp(bufs, transforms)
+        images = self.warp.wait() if split_warp else self.warp(bufs, transforms)
         warped_at = time.monotonic()
         try:
           if isinstance(self.client, AsyncClient):
@@ -307,6 +318,8 @@ class JoiningModel:
         else:
           self._remember(result)
         self.last_frame.update(held=held, output_age_ms=(time.monotonic() - self.last_output_at) * 1000.)
+        if isinstance(self.client, AsyncClient):
+          self.last_frame['usb_direct'] = getattr(self.client.client, 'metrics', {})
         was_proving = self.recovery.proving
         self.recovery.note(held, time.monotonic(), self.last_output_at)
         if was_proving and not self.recovery.proving:
@@ -331,7 +344,7 @@ class JoiningModel:
           outputs['raw_pred'] = result.copy()
         return outputs
       except Exception as exc:
-        cloudlog.exception('Jetlink failed; attempting same-frame local recovery')
+        cloudlog.exception('Jetlink failed; attempting same-frame local recovery: %s', json.dumps(self.last_frame))
         self.error = str(exc)
         try:
           self.client.close()

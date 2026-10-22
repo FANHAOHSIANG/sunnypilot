@@ -213,3 +213,39 @@ receive.read_wait 可能包含讀取開始後等待下一個請求的空閒時�
 對照 carrot-wip 4920f270b56ad472c2f90ddf24f2643b19e7af37：其 adapter
 仍使用本機 socket 與同步 FunctionFS 寫入；本次採用 zoompilot 的 AIO
 傳輸修正，保留 Carrot 衍生的逐連線 v2/v3 協定與完整輸出驗證。
+
+## Mac 推論直接使用 USB 資料端點
+
+在前一輪 AIO 移植之上，Mac 路徑不再逐幀經過 modeld → Unix socket →
+jetlinkd → USB。jetlinkd 保持 ep0、configfs 與獨占使用權；modeld 的單一
+背景 IO worker 直接借用 FunctionFS 資料端點。Unix socket 僅承載 borrow、
+drop、bounce、release 控制訊息，不承載影像、模型輸入或輸出。
+iPhone/iPad 的 NCM/TCP 路徑保留既有流程。
+
+offroad 的模型識別與暖機仍由 jetlinkd 處理。當 modeld 符合切入條件時，
+先停止 daemon 的端點讀取、清理 AIO、重新列舉一次，才將獨占使用權交給
+modeld。接手後重新 HELLO、確認 SuperSpeed、相同模型 SHA 與完整 tensor
+contract，避免把 offroad 的 ready 當成新連線仍然有效。Mac App 須支援
+既有的斷線自動重新連線；不需修改封包協定。
+
+退回小模型時，端點清理在背景進行，不讓相機迴圈等待 USB 解除綁定。
+只有接獲資料端點已關閉、reader 已結束、AIO 清理完成的確認，owner 才
+重新綁定。借用程序意外消失或清理失敗會保持未綁定並要求重開 C4，
+避免兩個程序同時讀端點。這是本分支的精簡 lease，並非完整照搬上游
+provision/Owner；正常回退也會重新列舉，不宣稱完全無縫重連。
+
+影像 warp 拆為 start/wait，先提交 GPU 工作，再處理晚到回覆與 CPU 輸入，
+最後等影像完成才送出。GPU 仍只由 modeld 相機執行緒操作。保留單一
+待回覆請求與自有輸入副本；尚未移植上游 coherent GPU 映射及完整零拷貝。
+
+46 ms 每幀預算、150 ms 初始/硬逾時、20 幀 proving、前三幀 settling、
+模型身分與有限值檢查、巡航/MADS gate 及原生小模型回退均未放寬。
+連線狀態 transport=usb-direct 表示已啟用新路徑，leased 表示端點借出；
+它們都不代表大模型已接手。仍以 model JSON 的 active/proving 判斷。
+last_frame.usb_direct 記錄已完成 exchange 的 frame、exchange_ms、server_us
+與 USB send/receive；該 frame 可能是上一個晚到回覆，不能和本幀混算。
+回退例外現在會把 last_frame 一起寫入錯誤日誌，qlog 可保留這組診斷。
+
+離線測試驗證獨占借用、清理順序、模型改變、USB2 降速、非阻塞回退與
+影像準備順序。這些不能證明實車 USB 延遲已改善；需停妥、READY、巡航
+與 MADS 關閉時先確認 active=true、proving=false，才判定初始驗證通過。
