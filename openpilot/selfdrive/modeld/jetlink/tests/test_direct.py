@@ -97,6 +97,30 @@ class LeaseTests(unittest.TestCase):
     self.assertEqual(self.events, [])
     self.assertIsNone(self.owner.failed)
 
+  def test_cancel_after_request_before_grant_keeps_owner_reusable(self):
+    # Modeld can cancel its join while jetlinkd closes the idle USB session.
+    # Its borrow request remains readable, but replying to the closed socket
+    # fails. No complete grant means that client cannot have opened endpoints.
+    with patch.object(direct, 'packet', side_effect=BrokenPipeError('canceled grant')):
+      direct.send(self.client, b'{"op":"borrow","version":1}')
+      self.finish()
+    self.assertEqual(len(self.errors), 1)
+    self.assertIsInstance(self.errors[0], BrokenPipeError)
+    self.assertEqual(self.events, [])
+    self.assertIsNone(self.owner.failed)
+    self.wait_exit.assert_not_called()
+
+  def test_partial_grant_failure_does_not_create_an_endpoint_lease(self):
+    def partial_grant(sock, value):
+      sock.sendall(b'\x40\x00\x00\x00{"version":1')
+      raise BrokenPipeError('partial grant')
+    with patch.object(direct, 'packet', side_effect=partial_grant):
+      direct.send(self.client, b'{"op":"borrow","version":1}')
+      self.finish()
+    self.assertIsInstance(self.errors[0], BrokenPipeError)
+    self.assertEqual(self.events, [])
+    self.assertIsNone(self.owner.failed)
+
   def test_incomplete_cleanup_never_rebinds(self):
     self.borrow()
     self.command('drop')

@@ -1,5 +1,18 @@
 # Mac 上路故障：與 zoompilot 的來源比對
 
+## 2026-10-22 取消 USB 交接的修正
+
+裝置 e1d05cd98 的紀錄顯示：第 14/20 幀 proving 沿用上一幀而回退，
+且有 `small model recovered on this frame`。後續另一輪交接在傳送 USB
+grant 時遇到 `BrokenPipeError`，並鎖在 borrower cleanup 未確認。
+舊程式在完整 grant 送出前就標記已借出，因此尚未取得 endpoint 資訊的
+取消連線也被誤判為未清理的借用者。現在只在完整 grant 成功送出後
+啟用借用者清理責任；半包或傳送失敗不能由客戶端解碼，不會開啟 endpoint。
+已成功授權後的 EOF、讀取執行緒未退出、AIO 未清空等情況仍然阻擋重用。
+
+這項修正處理誤鎖重連，不宣稱解決 proving 的延遲；20 幀驗證、46 ms
+保留幀預算與小模型接手條件保持原設定。需在 C4 實機確認重試可以恢復。
+
 ## 2026-10-22 再核對與移植（本節為目前實作）
 
 來源固定為 zoompilot/zoompilot `632b0b0bebd608cb4846c00cec8c9522eac514f2`，

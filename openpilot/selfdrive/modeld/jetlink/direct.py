@@ -74,9 +74,13 @@ def serve_lease(connection, owner, spec, publish):
       raise ValueError('Invalid USB lease request')
     if owner.session is not None or not owner.owner.lendable:
       raise RuntimeError('USB endpoints were not released before lending')
-    granted = True
     packet(connection, dict(version=1, mount=owner.owner.mount, udc=owner.udc,
                             gadget=owner.owner.gadget, spec=spec.to_dict()))
+    # A borrower opens endpoints only after receiving this complete packet.
+    # Cancellation while the idle transport is closing can leave a stale
+    # request here: a failed/partial grant cannot be decoded by that client
+    # and must not be treated as an outstanding endpoint lease.
+    granted = True
     connection.settimeout(.5)
     while True:
       publish('ready', spec=spec, transport='usb-direct', leased=True)
