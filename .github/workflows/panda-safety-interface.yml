@@ -1,0 +1,33 @@
+name: Panda safety interface
+on:
+  push:
+    branches: [hkg-enhanced-jetlink]
+  pull_request:
+    paths:
+      - panda
+      - openpilot/selfdrive/pandad/spi.cc
+      - openpilot/selfdrive/pandad/panda_comms.h
+      - tools/jetlink/check_panda_spi.py
+      - openpilot/selfdrive/pandad/pandad.cc
+      - opendbc_repo
+      - tools/jetlink/check_panda_compat.py
+      - .github/workflows/panda-safety-interface.yml
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: git submodule update --init --depth 1 panda opendbc_repo
+      - run: python tools/jetlink/check_panda_compat.py --self-test
+      - run: python tools/jetlink/check_panda_compat.py

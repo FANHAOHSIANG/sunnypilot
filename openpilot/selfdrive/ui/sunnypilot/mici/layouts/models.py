@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 import pyray as rl
 
+from openpilot.common.jetlink_status import status_text
 from openpilot.cereal import custom
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
@@ -23,6 +24,11 @@ def _model_info() -> tuple[str, str, str]:
   """(active model, info header, info text) for the panel. Runner-matched: the
   active line names what actually drives, and a notable big-model state takes
   the info pair."""
+  if ui_state.params.get_bool("JetlinkEnabled"):
+    status = status_text()
+    active_prefix = "Active — "
+    active_name = status.removeprefix(active_prefix) if status.startswith(active_prefix) else model_info()[1]
+    return active_name, "Jetlink", status
   source, active_name, other_name = model_info()
   state = big_model_state()
   _, _, carry_display = carrying_model()
@@ -78,14 +84,38 @@ class ModelsLayoutMici(NavScroller):
     self._was_downloading = False
     self._selection_source: str | None = None
 
+    self.jetlink_btn = BigButton("Jetlink")
+    self.jetlink_btn.set_click_callback(self._select_jetlink_mode)
+
     self.select_model_btn = BigButton(tr("select model"))
     self.select_model_btn.set_click_callback(self._show_folders)
 
     self.cancel_download_btn = BigButton(tr("cancel download"))
     self.cancel_download_btn.set_click_callback(lambda: ui_state.params.remove("ModelManager_DownloadRef"))
 
-    self.main_items = [self.current_model_info, self.select_model_btn, self.cancel_download_btn]
+    self.main_items = [self.current_model_info, self.jetlink_btn, self.select_model_btn, self.cancel_download_btn]
     self._scroller.add_widgets(self.main_items)
+
+  def _select_jetlink_mode(self):
+    if not ui_state.is_offroad():
+      return
+    buttons = []
+    for label, enabled, ios in (("off", False, False),
+                                ("Mac / Jetson", True, False),
+                                ("iPhone / iPad", True, True)):
+      button = BigButton(label)
+      button.set_click_callback(lambda e=enabled, i=ios: self._set_jetlink_mode(e, i))
+      buttons.append(button)
+    self._push_selection_view(buttons)
+
+  def _set_jetlink_mode(self, enabled, ios):
+    if not ui_state.is_offroad():
+      return
+    ui_state.params.put_bool("JetlinkIOS", ios, block=True)
+    ui_state.params.put_bool("JetlinkEnabled", enabled, block=True)
+    self._pop_to_main()
+    gui_app.push_widget(BigDialog(title="Restart required",
+                                  description="Restart C4 to apply. Jetlink can connect in the background. Disable cruise and MADS to switch into the big model."))
 
   @property
   def model_manager(self):
@@ -188,6 +218,9 @@ class ModelsLayoutMici(NavScroller):
   def _update_state(self):
     super()._update_state()
 
+    self.jetlink_btn.set_enabled(ui_state.is_offroad())
+    self.jetlink_btn.set_value(("iPhone / iPad" if ui_state.params.get_bool("JetlinkIOS") else "Mac / Jetson")
+                               if ui_state.params.get_bool("JetlinkEnabled") else "off")
     self.select_model_btn.set_enabled(ui_state.is_offroad())
     self.cancel_download_btn.set_visible(False)
     self.current_model_info.current_model_header._shimmer = False
@@ -246,3 +279,4 @@ class ModelsLayoutMici(NavScroller):
     elif manager.selectedBundle and manager.selectedBundle.status == custom.ModelManagerSP.DownloadStatus.downloaded:
       self.current_model_info.info_header.set_text(tr("downloaded"))
       self.current_model_info.info_text.set_text(tr("downloaded"))
+

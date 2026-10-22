@@ -1,0 +1,56 @@
+name: Jetlink USB and iOS integration
+on:
+  push:
+    branches: [hkg-enhanced-jetlink, 'test/jetlink-ios-*']
+  pull_request:
+    paths:
+      - openpilot/selfdrive/modeld/jetlink/**
+      - third_party/jetlink/**
+      - openpilot/common/params_keys.h
+      - openpilot/common/jetlink_status.py
+      - openpilot/cereal/custom.capnp
+      - openpilot/selfdrive/selfdrived/selfdrived.py
+      - openpilot/sunnypilot/selfdrive/selfdrived/events.py
+      - openpilot/selfdrive/modeld/modeld.py
+      - openpilot/selfdrive/locationd/paramsd.py
+      - openpilot/sunnypilot/selfdrive/car/dynamics_compat.py
+      - openpilot/sunnypilot/selfdrive/car/tests/test_dynamics_compat.py
+      - openpilot/selfdrive/ui/sunnypilot/**/models.py
+      - openpilot/selfdrive/ui/mici/onroad/model_renderer.py
+      - openpilot/selfdrive/ui/mici/onroad/hud_renderer.py
+      - openpilot/selfdrive/ui/ui_state.py
+      - openpilot/selfdrive/ui/mici/layouts/home.py
+      - openpilot/selfdrive/ui/sunnypilot/onroad/predicted_stop_marker.py
+      - openpilot/selfdrive/ui/tests/test_c4_renderer.py
+      - openpilot/selfdrive/ui/tests/test_blue_path.py
+      - tools/jetlink/**
+      - tools/commaview/**
+      - .github/workflows/jetlink-ios.yml
+permissions:
+  contents: read
+jobs:
+  software:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pytest pycapnp requests
+      - run: git submodule update --init --depth 1 tinygrad_repo opendbc_repo
+      - run: bash -n tools/jetlink/ios-root.sh
+      - run: python -m py_compile tools/commaview/diagnose.py
+      - run: python tools/jetlink/check_ui_params.py
+      - run: python -m unittest discover -s openpilot/selfdrive/ui/tests -p test_c4_renderer.py -v
+      - run: python -m unittest discover -s openpilot/selfdrive/ui/tests -p test_blue_path.py -v
+      - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
+      - run: PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
+      - run: PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
+      - run: |
+          PYTHONPATH=third_party/jetlink:third_party/jetlink/tests python -m pytest -q -c /dev/null -o markers='real_aio: exercise Linux AIO syscalls' third_party/jetlink/tests/test_aio.py third_party/jetlink/tests/test_ffs.py third_party/jetlink/tests/test_ffs_send.py third_party/jetlink/tests/test_ffs_compat.py
+      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot openpilot/selfdrive/ui/ui_state.py openpilot/selfdrive/ui/mici openpilot/selfdrive/modeld/modeld.py openpilot/selfdrive/selfdrived/selfdrived.py openpilot/sunnypilot/selfdrive/selfdrived/events.py openpilot/common/jetlink_status.py

@@ -1,0 +1,21 @@
+{
+  "runtime_tag": "v0.0.59-beta",
+  "app_tag": "app-v0.0.163-beta",
+  "source": "https://commaview.com/commaviewd/v0.0.59-beta/comma",
+  "reviewed_hkg_commit": "d648262a015dfba1d8391d935c7fa93ea8214561",
+  "files": {
+    "install.sh": "db46ba08e4afa68f62277c06d8410fc3b7a9d3c201e9c76a9b53f7178703d248",
+    "start.sh": "fe7be77e1bdf0b3eea7b823f4a69b7228806a0e359331fb7d80942afffbd1258",
+    "stop.sh": "6c2ad5b217e86cbaff586006a26e4a4e5378442e9bc64241768624592b255c9f",
+    "uninstall.sh": "c18d6fc14115a75e44d2e12510ffe1aee3db3e04b31f7fde5b2b417a77ec5c91",
+    "runtime-debug.defaults.json": "5ec21063e57c494ccb7457a1057f1e6dbab6d52798ec6e190edcf40d9969d8cd",
+    "scripts/verify_onroad_ui_export_patch.sh": "64f758c057e44dd85ba7edcc0acc1b1c0975cd0666a4ede6ec79631ca5ad77bc",
+    "scripts/apply_onroad_ui_export_patch.sh": "b549a8cab102900e274cf6e35af190a27debfb8ecf9d9445f002b1c08e09cc2c",
+    "scripts/revert_onroad_ui_export_patch.sh": "b98123a4b45d04a68748881f85b3d2a717079a0e009645bfd3971007d39d351a",
+    "scripts/smoke_onroad_ui_export_helper.py": "ac292f67ef7973dd65b9a4377fb13424a111a7e82408a0c5975a1d53647e50d8",
+    "scripts/transform_onroad_ui_export.py": "753c509f431153e71d1e6ad81c13d2cd6b063f503d97148c8bb1df81b265c9c2",
+    "scripts/run_when_offroad.sh": "f4850b2a0d31657a14220f0d7fcdf731d2cf23f24f868cb8447c4583c25477e6",
+    "src/commaview_export.py": "69be3c11e0d2ce1c1c3f8432e94381ad0ed6bfcc8d37a002c5c5fcba07238236",
+    "src/commaview_drive_stats.py": "2a7687c1d856a5de7b365b51d0bb601e6fa7380a425fcac325571703d1d8d1e1"
+  }
+}

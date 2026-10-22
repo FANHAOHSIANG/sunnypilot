@@ -9,7 +9,7 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Priority, ET, Alert, \
-  NoEntryAlert, ImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, AlertCallbackType, wrong_car_mode_alert
+  NoEntryAlert, ImmediateDisableAlert, EngagementAlert, AlertCallbackType, wrong_car_mode_alert
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
 from openpilot.common.hardware import HARDWARE
 
@@ -181,10 +181,6 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Controls Mismatch: Lateral"),
   },
 
-  EventNameSP.experimentalModeSwitched: {
-    ET.WARNING: NormalPermanentAlert("Experimental Mode Switched", duration=1.5)
-  },
-
   EventNameSP.wrongCarModeAlertOnly: {
     ET.WARNING: wrong_car_mode_alert,
   },
@@ -250,6 +246,14 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Lane Change Unavailable: Road Edge",
       "",
       AlertStatus.userPrompt, AlertSize.small,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 0.1),
+  },
+
+  EventNameSP.jetlinkFallback: {
+    ET.PERMANENT: Alert(
+      "Jetlink Unavailable",
+      "Small model active",
+      AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 0.1),
   },
 

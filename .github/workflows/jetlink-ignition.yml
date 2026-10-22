@@ -1,0 +1,25 @@
+name: Jetlink ignition interlock
+on:
+  push:
+    branches: [hkg-enhanced-jetlink]
+  pull_request:
+    paths:
+      - openpilot/selfdrive/modeld/jetlink/**
+      - .github/workflows/jetlink-ignition.yml
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p test_ignition.py -v
+      - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink

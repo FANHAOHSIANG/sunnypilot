@@ -41,6 +41,9 @@ def carrying_model() -> tuple[str | None, str | None, str | None]:
   """(source, internal name, display name) of what actually drives. Runner-matched:
   when a Default big cannot carry, stock modeld runs the Default small, never the
   small slot's pick; a custom big has no automatic fallback yet -> (None, None, None)."""
+  if ui_state.params.get_bool("JetlinkEnabled"):
+    name = default_model_name("qcom")
+    return "qcom", name, name
   source = active_source()
   if source == "chestnut":
     bundle = get_selected_bundle(ui_state.params, "chestnut")
@@ -75,6 +78,8 @@ def model_info() -> tuple[str, str, str]:
   Names come from the params slots, never modelManagerSP.activeBundle — the
   manager republishes a tick after a chestnut change, so the stale bundle
   would flash the wrong model."""
+  if ui_state.params.get_bool("JetlinkEnabled"):
+    return "qcom", default_model_name("qcom"), default_model_name("chestnut")
   source = active_source()
   other = "qcom" if source == "chestnut" else "chestnut"
   active_bundle = get_selected_bundle(ui_state.params, source)

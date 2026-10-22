@@ -3,3 +3,6 @@
 	pushurl = https://huggingface.co/sunnypilot/sunnypilot-lfs.git/info/lfs
 
 	locksverify = false
+	# Mac Jetlink runs the external driving model on the host. Keep the small
+	# native fallback and driver-monitoring assets; do not fetch Chestnut weights.
+	fetchexclude = openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx,openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl

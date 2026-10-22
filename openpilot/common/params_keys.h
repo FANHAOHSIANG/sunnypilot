@@ -42,9 +42,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DoUninstall", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DriverTooDistracted", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
     {"DriverLockoutCount", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, INT, "0"}},
-    {"AlphaLongitudinalEnabled", {PERSISTENT | DEVELOPMENT_ONLY | BACKUP, BOOL}},
     {"ExperimentalMode", {PERSISTENT | BACKUP, BOOL}},
     {"ExperimentalModeConfirmed", {PERSISTENT | BACKUP, BOOL}},
+    {"DynamicExperimentalControl", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"AlphaLongitudinalEnabled", {PERSISTENT | DEVELOPMENT_ONLY | BACKUP, BOOL}},
     {"FirmwareQueryDone", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"ForcePowerDown", {PERSISTENT, BOOL}},
     {"GitBranch", {PERSISTENT, STRING}},
@@ -72,7 +73,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"JoystickDebugMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"LanguageSetting", {PERSISTENT | BACKUP, STRING, "en"}},
     {"LastAthenaPingTime", {CLEAR_ON_MANAGER_START, INT}},
-    {"LastGPSPosition", {PERSISTENT, STRING}},
+    {"LastGPSPosition", {PERSISTENT, BYTES}},
     {"LastManagerExitReason", {CLEAR_ON_MANAGER_START, STRING}},
     {"LastOffroadStatusPacket", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"LastAgnosPowerMonitorShutdown", {CLEAR_ON_MANAGER_START, STRING}},
@@ -142,8 +143,19 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UpdaterLastFetchTime", {PERSISTENT, TIME}},
     {"UptimeOffroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
+    {"JetlinkEnabled", {PERSISTENT, BOOL}},
+    {"JetlinkIOS", {PERSISTENT, BOOL, "0"}},
     {"ChestnutActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"ChestnutLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"ChestnutRetry", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"InitialCruiseSpeedKph", {PERSISTENT, INT, "40"}},
+    {"NavDestination", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
+    {"NavigationEnabled", {PERSISTENT, BOOL, "0"}},
+    {"Offroad_ChestnutModelError", {CLEAR_ON_MANAGER_START, JSON}},
+    {"Offroad_Pairing", {CLEAR_ON_MANAGER_START, JSON}},
+    {"Offroad_UploadsIgnored", {CLEAR_ON_MANAGER_START, JSON}},
+    {"PairingEmail", {PERSISTENT, STRING}},
+    {"PairingProvider", {PERSISTENT, STRING}},
     {"Version", {PERSISTENT, STRING}},
 
     // --- sunnypilot params --- //
@@ -247,7 +259,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ToyotaEnforceStockLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaStopAndGoHack", {PERSISTENT | BACKUP, BOOL, "0"}},
 
-    {"DynamicExperimentalControl", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"BlindSpot", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     // sunnypilot model params

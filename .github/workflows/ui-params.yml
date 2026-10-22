@@ -1,0 +1,27 @@
+name: UI parameter registry
+on:
+  push:
+    branches: [hkg-enhanced-jetlink]
+  pull_request:
+    paths:
+      - openpilot/common/params_keys.h
+      - openpilot/common/params.h
+      - openpilot/selfdrive/ui/**
+      - tools/jetlink/check_ui_params.py
+      - .github/workflows/ui-params.yml
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tools/jetlink/check_ui_params.py

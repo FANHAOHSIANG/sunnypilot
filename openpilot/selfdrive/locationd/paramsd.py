@@ -12,6 +12,7 @@ from openpilot.selfdrive.locationd.models.car_kf import CarKalman, ObservationKi
 from openpilot.selfdrive.locationd.models.constants import GENERATED_DIR
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.selfdrive.car.dynamics_compat import normalized_dynamics
 
 MAX_ANGLE_OFFSET_DELTA = 20 * DT_MDL  # Max 20 deg/s
 ROLL_MAX_DELTA = np.radians(20.0) * DT_MDL  # 20deg in 1 second is well within curvature limits
@@ -35,13 +36,13 @@ class VehicleParamsLearner:
     self.x_initial[States.ANGLE_OFFSET] = angle_offset
     self.P_initial = P_initial if P_initial is not None else CarKalman.P_initial
 
+    inertia, stiffness_front, stiffness_rear = normalized_dynamics(CP)
     self.kf.set_globals(
-      mass=CP.mass,
-      rotational_inertia=CP.rotationalInertia,
+      rotational_inertia=inertia,
       center_to_front=CP.centerToFront,
       center_to_rear=CP.wheelbase - CP.centerToFront,
-      stiffness_front=CP.tireStiffnessFront,
-      stiffness_rear=CP.tireStiffnessRear
+      stiffness_front=stiffness_front,
+      stiffness_rear=stiffness_rear
     )
 
     self.min_sr, self.max_sr = 0.5 * CP.steerRatio, 2.0 * CP.steerRatio
