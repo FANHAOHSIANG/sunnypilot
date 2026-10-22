@@ -1,5 +1,25 @@
 # Mac 上路故障：與 zoompilot 的來源比對
 
+## 2026-10-23 對齊 protocol 3 的精簡回覆
+
+路線 0000003a 的起始與第 42 分鐘有 held proving frame；第 42 分鐘也記錄
+10 秒內 21 次 hold 後退回本機。這只能證明回覆未及時到達，不能證明 Mac
+無法執行該模型。相同裝置／模型在 zoompilot 可用的回報促使重新比對資料路徑。
+
+發現本分支 Mac PipelineClient 每幀固定要求 WANT_HIDDEN，而來源
+zoompilot/jetlink b1d7041 的 client.py 預設不要求 hidden_state，僅在原始
+預測除錯時要求。現在對齊：protocol 3 的循環狀態留在 Mac，回覆只攜帶
+必要輸出；C4 依契約重建原有切片位置，hidden_state 填零。既有 protocol 3
+輸入打包已去除 prev_feat，不會把填零內容送回 Mac 當作模型歷史。
+以 V2/V3 的 18,452 float 契約計，排除 16,384 float 隱藏狀態後，輸出資料
+由 73,808 bytes 降為 8,272 bytes（不含封包表頭與遙測）。SEND_RAW_PRED
+仍要求完整輸出。iOS 路徑不變；模型身分檢查仍逐個採用輸出執行，未降低
+遙測頻率；46 ms、proving、hold 次數、硬逾時與本機回退門檻不變。
+
+新增精簡切片重建、queued 歷史歸屬／reset、完整除錯輸出及錯誤回覆格式
+拒絕測試。這是減少額外傳輸，並非完整移植 owner，也不證明已消除定位
+錯誤或所有模型的延遲；仍須以 C4＋Mac 比較相同模型的新行車紀錄。
+
 ## 2026-10-22 進行中的 USB 握手不依 ready 廣告取消
 
 0e265501d 的裝置紀錄確認：第 12/20 幀 proving 延遲後同幀小模型接手；
@@ -57,7 +77,7 @@ grant 時遇到 `BrokenPipeError`，並鎖在 borrower cleanup 未確認。
 | 大模型失效 | 回退本機、重設歷史；不能掩蓋本機失敗 | 同幀回退；真實 CAN/ACC/本機模型故障仍可解除控制 |
 | 重連退避 | 前三次 1 秒，之後 5 秒倍增到 60 秒，穩定 60 秒重置 | 已有相同退避；沒有移植 replug 提前解除退避 |
 | 常駐 owner | 上游完整 Owner/Loan、provision、模型目錄與電源管理 | 保留本分支精簡 lease、App 選模型與 PID/starttime 回收；仍有一次 USB 重新列舉，不宣稱完全無縫 |
-| 回覆與模型相容 | protocol 3，通常不回傳 hidden state | 保留 full-output 及 queued/stateful 模型相容；每個可採用輸出核對模型身分，缺 SHA 時使用有期限的 STATE_REQ |
+| 回覆與模型相容 | protocol 3，通常不回傳 hidden state | Mac 對齊精簡回覆並重建 parser 切片；queued/stateful 模型相容，每個可採用輸出核對模型身分，缺 SHA 時使用有期限的 STATE_REQ |
 | iPhone/iPad | 上游 cable/TCP，可協商 datagrams | 保留已用的 NCM/TCP + IPC；本次 Mac pipeline 不替換 iOS 路徑 |
 
 因此核心 Mac 推論與有界回退採用相同設計，但部署、模型選擇、USB owner、

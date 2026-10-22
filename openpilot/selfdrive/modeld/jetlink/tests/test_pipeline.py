@@ -10,7 +10,7 @@ import numpy as np
 
 from jetlink import protocol as P
 from jetlink.transport.base import Message, LinkError, LinkTimeout
-from openpilot.selfdrive.modeld.jetlink.contracts import V3_SPEC
+from openpilot.selfdrive.modeld.jetlink.contracts import DEFAULT_SPEC, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.pipeline import PipelineClient
 from openpilot.selfdrive.modeld.jetlink.direct import DirectClient
 
@@ -40,6 +40,11 @@ class Wire:
 
   def reply(self, seq, frame, value=1., sha=V3_SPEC.sha256, status=0):
     output = np.full(V3_SPEC.output_nelem, value, np.float32)
+    request = next((body for kind, sent, body in self.sent if kind == P.Msg.INFER_REQ and sent == seq), None)
+    flags = P.unpack_infer_req(request)[1] if request is not None else P.Flag.WANT_STATE
+    if not flags & P.Flag.WANT_HIDDEN:
+      hidden = V3_SPEC.output_slices['hidden_state']
+      output = np.concatenate((output[:hidden.start], output[hidden.stop:]))
     payload = struct.pack('<IIIII', frame, status, 32000, 50, 32050) + output.tobytes()
     if sha is not None:
       payload += json.dumps({'loaded': sha}).encode()
@@ -69,7 +74,9 @@ class PipelineTests(unittest.TestCase):
     self.wire.reply(first, 1, value=1.)
     self.wire.reply(second, 2, value=2.)
     output = self.client.infer_end(second, hold=.04)
-    np.testing.assert_array_equal(output, np.full(V3_SPEC.output_nelem, 2.))
+    expected = np.full(V3_SPEC.output_nelem, 2.)
+    expected[V3_SPEC.output_slices['hidden_state']] = 0
+    np.testing.assert_array_equal(output, expected)
     self.assertEqual(self.client.output_at, 10.05)
     self.assertEqual(len(self.client.pending), 0)
     self.assertFalse(self.client.dead)
@@ -81,6 +88,49 @@ class PipelineTests(unittest.TestCase):
     self.assertEqual(self.client.drain(), 1)
     self.assertEqual(self.client.output_frame, 2)
     self.assertEqual(self.client.frames_lost, 1)
+
+  def test_compact_reply_preserves_slices_on_both_sides_of_hidden_state(self):
+    seq = self.send(1)
+    self.assertFalse(self.client.pending[0].flags & P.Flag.WANT_HIDDEN)
+    self.wire.reply(seq, 1, value=7.)
+    output = self.client.infer_end(seq)
+    hidden = V3_SPEC.output_slices['hidden_state']
+    np.testing.assert_array_equal(output[:hidden.start], 7.)
+    np.testing.assert_array_equal(output[hidden], 0.)
+    np.testing.assert_array_equal(output[hidden.stop:], 7.)
+    self.assertEqual(output.size, V3_SPEC.output_nelem)
+
+  def test_raw_predictions_request_and_receive_full_hidden_state(self):
+    self.client.want_hidden = True
+    seq = self.send(1)
+    self.assertTrue(self.client.pending[0].flags & P.Flag.WANT_HIDDEN)
+    self.wire.reply(seq, 1, value=7.)
+    np.testing.assert_array_equal(self.client.infer_end(seq), 7.)
+
+  def test_queued_model_keeps_recurrence_on_server_and_preserves_reset(self):
+    self.client.spec = DEFAULT_SPEC
+    packed = np.ones(DEFAULT_SPEC.packed_nelem, np.float32)
+    seq = self.client.infer_begin(self.image, packed, 1, reset=True)
+    body = self.wire.sent[-1][2]
+    _, flags = P.unpack_infer_req(body)
+    self.assertTrue(flags & P.Flag.RESET_QUEUES)
+    self.assertFalse(flags & P.Flag.WANT_HIDDEN)
+    # Only desire, traffic convention and action timing cross the wire;
+    # prev_feat is owned by protocol 3's server, even for a queued graph.
+    self.assertEqual(len(body), P.INFER_REQ_SIZE + DEFAULT_SPEC.warped_nbytes + 12 * 4)
+    self.wire.reply(seq, 1, value=3., sha=DEFAULT_SPEC.sha256)
+    output = self.client.infer_end(seq)
+    np.testing.assert_array_equal(output[DEFAULT_SPEC.output_slices['hidden_state']], 0.)
+    np.testing.assert_array_equal(output[DEFAULT_SPEC.output_slices['action']], 3.)
+
+  def test_server_sending_full_output_to_compact_request_is_rejected(self):
+    seq = self.send(1)
+    payload = struct.pack('<IIIII', 1, 0, 32000, 50, 32050)
+    payload += np.zeros(V3_SPEC.output_nelem, np.float32).tobytes()
+    self.wire.replies.append(Message(P.Msg.INFER_RESP, seq, 0, memoryview(payload)))
+    with self.assertRaises((ValueError, LinkError)):
+      self.client.infer_end(seq)
+    self.assertTrue(self.client.dead)
 
   def test_backpressure_refuses_without_queuing_or_resetting_history(self):
     self.wire.busy = True
