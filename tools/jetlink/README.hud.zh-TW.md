@@ -2,6 +2,8 @@
 
 基底：`FANHAOHSIANG/sunnypilot` 的 `hkg-enhanced-jetlink`
 `b2d7f2893ce76231a8de7014379c676ecf8b542e`。獨立分支：`hkg-enhanced-jetlink-hud`。
+2026-10-23 已合併 `hkg-enhanced-jetlink` 的 `d87715b5f`：Mac protocol 3
+採用精簡模型回覆，循環隱藏狀態留在 Mac；保留 HUD 傳輸及預設關閉設定。
 這是可供停車驗證的原始碼候選；沒有遠端部署到 C4 或 Mac。
 
 ## 本版功能
@@ -64,7 +66,9 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-本次 C4 端 42 項測試通過；Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）。
+合併 `d87715b5f` 後，C4 端 46 項測試通過（test_direct、test_pipeline、test_hud），
+包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
+先前 Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）；本次未修改 Mac 端。
 另以 pinned Carrot parser 驗證合成的 20 m/s 車速 → 72 km/h、設定 90 km/h、
 17 點路徑與前車、latActive=true。這是合成資料測試，不是實車紀錄或完整畫面測試。
 尚未執行實體 C4/Mac/TURZX 顯示與延遲測試，也沒有執行 C4 完整 ARM64 編譯。

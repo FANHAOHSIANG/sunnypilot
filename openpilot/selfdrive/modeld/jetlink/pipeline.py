@@ -2,7 +2,8 @@
 
 Copyright (c) 2026-, Zeph Leggett. See third_party/jetlink/LICENSE.
 
-Keep this fork's protocol-3 packing and full-output contract. A soft wait
+Keep this fork's protocol-3 packing and reconstruct its full-output contract
+from zoompilot's compact replies (hidden state stays on the server). A soft wait
 holds an output without discarding its pending reply; subsequent camera
 frames can be submitted while an earlier reply is in flight. Only Mac USB
 uses this class; the iOS socket adapter keeps its existing synchronous client.
@@ -10,6 +11,7 @@ uses this class; the iOS socket adapter keeps its existing synchronous client.
 from collections import deque
 from typing import NamedTuple
 import json
+import os
 import time
 
 import numpy as np
@@ -34,6 +36,7 @@ class PipelineClient(JetlinkClient):
     self.output_at = 0.
     self.output_frame = None
     self.frames_lost = 0
+    self.want_hidden = bool(os.getenv('SEND_RAW_PRED'))
 
   def _expect(self, kind, seq, timeout):
     end = None if timeout is None else time.monotonic() + timeout
@@ -77,7 +80,8 @@ class PipelineClient(JetlinkClient):
     warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _protocol3_packed(self.spec, _as_bytes(packed, self.spec.packed_nbytes, 'packed'))
     seq = self._next_seq()
-    flags = P.Flag.WANT_HIDDEN | P.Flag.WANT_STATE | (P.Flag.RESET_QUEUES if reset else 0)
+    flags = ((P.Flag.WANT_HIDDEN if self.want_hidden else 0) |
+             (P.Flag.WANT_STATE if want_state else 0) | (P.Flag.RESET_QUEUES if reset else 0))
     parts = (P.pack_infer_req(frame_id, flags), warped, packed)
     sent = Sent(seq, frame_id, flags, time.monotonic())
     try:
@@ -146,20 +150,37 @@ class PipelineClient(JetlinkClient):
     frame, status, gpu, queue, total = P.unpack_infer_resp(message.payload)
     if frame != sent.frame or status != P.Status.OK:
       raise LinkError('Inference response frame/status mismatch')
-    end = P.INFER_RESP_SIZE + self.spec.output_nbytes
+    hidden = self.spec.output_slices.get('hidden_state')
+    hidden_range = hidden.indices(self.spec.output_nelem)[:2] if hidden is not None else None
+    whole = bool(sent.flags & P.Flag.WANT_HIDDEN)
+    count = self.spec.output_nelem
+    if not whole and hidden_range is not None:
+      count -= hidden_range[1] - hidden_range[0]
+    end = P.INFER_RESP_SIZE + count * 4
     if message.payload.nbytes < end:
       raise LinkError('Inference response is missing model outputs')
     state = None
     if message.payload.nbytes > end:
+      if not sent.flags & P.Flag.WANT_STATE:
+        raise LinkError('Unexpected inference telemetry or output layout')
       state = json.loads(bytes(message.payload[end:]))
       if not isinstance(state, dict):
         raise LinkError('Inference telemetry is not an object')
       if 'loaded' in state and state['loaded'] != self.spec.sha256:
         raise LinkError('App model changed during USB inference')
-    output = np.frombuffer(message.payload, np.float32, self.spec.output_nelem, P.INFER_RESP_SIZE).copy()
-    if not np.all(np.isfinite(output)):
+    reply = np.frombuffer(message.payload, np.float32, count, P.INFER_RESP_SIZE)
+    if not np.all(np.isfinite(reply)):
       raise LinkError('Inference output is not finite')
-    self.last_state = state
+    if not whole and hidden_range is not None:
+      # Protocol 3 owns recurrence on the server. Keep parser slice offsets
+      # without bringing that state back over USB or feeding it to the graph.
+      start, stop = hidden_range
+      output = np.zeros(self.spec.output_nelem, np.float32)
+      output[:start], output[stop:] = reply[:start], reply[start:]
+    else:
+      output = reply.copy()
+    if state is not None:
+      self.last_state = state
     self.last_timings = gpu, queue, total
     self.last_output, self.output_at, self.output_frame = output, sent.at, frame
     return output
