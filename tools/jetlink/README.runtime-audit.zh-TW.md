@@ -1,5 +1,39 @@
 # Mac 上路故障：與 zoompilot 的來源比對
 
+## 2026-10-22 再核對與移植（本節為目前實作）
+
+來源固定為 zoompilot/zoompilot `632b0b0bebd608cb4846c00cec8c9522eac514f2`，
+以及它的 jetlink_repo `b1d704188758536e573108162d0f84c316b427d9`。
+以下不是「所有程式完全相同」的宣稱；下方較早章節保留歷史修正紀錄。
+
+| 機制 | zoompilot | 本分支目前處理 |
+| --- | --- | --- |
+| Mac 影格傳輸 | modeld 直接借用 FunctionFS，AIO 送出 | 同方向；不再逐幀繞本機 socket，也不再經 AsyncClient 工作佇列複製影像 |
+| 晚到回覆 | 多個請求可在途，依 seq/frame 收取；下一幀先 drain | 已移植至 pipeline.py；背壓時不送新影格，保留最新有效輸出；另限制最多四個在途請求 |
+| warp | 先啟動 GPU，再收回覆與組輸入，最後等待 | 已移植；保留 HKG 四輸入 graph，驗證每個 camera buffer 後重播 capture |
+| GPU 輸出 | IO-coherent write-back 映射，直接送出 | 已移植並核對 kernel 回傳 flags；不支援時留在小模型，不使用可能過期的影像 |
+| 小模型重設 | 上路前捕獲重設 JIT，回退時執行 | 已移植，保留 HKG state_pairs 與舊 _q 佇列；保留原 buffer identity |
+| 短暫 hold | 46 ms、前三幀 settling、20 幀 proving，5 連續或 10 秒 >20 holds 回退 | 相同門檻；另外保留 200 ms 輸出來源年齡上限 |
+| 推論硬逾時 | 200 ms | 保留本分支較嚴的 150 ms；未為了通過 proving 放寬 |
+| 初次切入／重切 | 巡航與 MADS 關閉；移動本身不阻擋 | 同方向，另核對 selfdriveState、latActive、longActive 與訊息新鮮度 |
+| 大模型失效 | 回退本機、重設歷史；不能掩蓋本機失敗 | 同幀回退；真實 CAN/ACC/本機模型故障仍可解除控制 |
+| 重連退避 | 前三次 1 秒，之後 5 秒倍增到 60 秒，穩定 60 秒重置 | 已有相同退避；沒有移植 replug 提前解除退避 |
+| 常駐 owner | 上游完整 Owner/Loan、provision、模型目錄與電源管理 | 保留本分支精簡 lease、App 選模型與 PID/starttime 回收；仍有一次 USB 重新列舉，不宣稱完全無縫 |
+| 回覆與模型相容 | protocol 3，通常不回傳 hidden state | 保留 full-output 及 queued/stateful 模型相容；每個可採用輸出核對模型身分，缺 SHA 時使用有期限的 STATE_REQ |
+| iPhone/iPad | 上游 cable/TCP，可協商 datagrams | 保留已用的 NCM/TCP + IPC；本次 Mac pipeline 不替換 iOS 路徑 |
+
+因此核心 Mac 推論與有界回退採用相同設計，但部署、模型選擇、USB owner、
+iOS 傳輸與部分更嚴的邊界仍是融合適配，不能寫成 100% 等同 zoompilot。
+未移植手機 datagram/充電電源政策、模型自動上傳與目錄選擇，也不改本車 Panda safety。
+
+`pipeline.py` 的測試使用實際封包欄位，涵蓋晚到回覆、seq/frame 錯配、
+背壓、硬逾時、非有限值、模型變更及身分核對期限。另有真實 pinned tinygrad
+CPU captured-reset 測試與 coherent flags 失敗處理。CPU/離線測試不能證明
+C4 KGSL 快取一致性、USB 延遲或實車可靠性；仍須實機確認。
+
+CommaView 時速未顯示另由 `python3 tools/commaview/diagnose.py` 檢查。
+目前沒有該次裝置端遙測，不能把未顯示時速直接歸因於 Jetlink。
+
 本次重新比對 zoompilot/zoompilot 632b0b0bebd608cb4846c00cec8c9522eac514f2 的
 Adapter，以及該版實際釘選的 jetlink_repo b1d704188758536e573108162d0f84c316b427d9
 之 joining.py / events.py / owner.py；不是只比對 Jetlink main 分支。

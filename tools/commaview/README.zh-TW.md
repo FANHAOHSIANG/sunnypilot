@@ -34,6 +34,30 @@ command**，輸入 C4 IP 與一次性配對碼，再按 Open Live View。
 
 ## 更新、卸載與限制
 
+### 即時畫面有影像但沒有時速
+
+先保持車輛停妥，開著 App 的即時畫面，在 C4 SSH 執行：
+
+```sh
+cd /data/openpilot
+python3 tools/commaview/diagnose.py
+```
+
+工具只讀取原生 carState、HideVEgoUI、時速單位、UI 掛鉤及 CommaView
+各遙測服務的設定與兩秒內送出增量，不輸出配對 token、VIN 或路線資料。
+停車時 0 km/h 是有效數值；收不到資料與 0 不相同。
+
+- 原生 carState 無效：先檢查車輛狀態來源。
+- HideVEgoUI 開啟：確認隱藏時速是否為預期設定，不自動替使用者關閉。
+- carState mode=off 或原生有效但 emittedCount 不增：檢查遙測設定與 App 連線。
+- emittedCount 有增加仍不顯示：需 App 接收／解析紀錄與顯示設定，不能只重裝 UI 掛鉤。
+- uiReloadPending：掛鉤檔已更新但執行中的 UI 尚未載入；停車後重新啟動。
+
+已核對本工具固定的 v0.0.59-beta helper SHA256：它的 UI exporter 只提供
+uiStateOnroad、carParams、projection 等 UI 資訊，並非舊公開 main 版的
+逐服務 carState JSON exporter。因此沒有把舊 exporter 混入新 runtime，
+也沒有宣稱此次已修好裝置上的時速問題；需要上述遙測才能定位。
+
 - 不要用 CommaView 官方引導流程直接重裝此自訂分支，它的來源名單仍可能拒絕。
 - App 內直接更新 runtime 可能覆蓋這兩個相容修正。更新應使用本分支的工具；
   本工具固定版本，不會自動跟進尚未驗證的新 runtime。

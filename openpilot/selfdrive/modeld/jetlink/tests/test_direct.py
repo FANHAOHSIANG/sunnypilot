@@ -248,6 +248,6 @@ class ClientSelectionTests(unittest.TestCase):
           patch.object(link, 'AsyncClient') as wrapped, patch.object(link, 'background_thread'):
         f = link.Future()
         link.ClientConnection._connect(f)
-        self.assertIs(f.result(), wrapped.return_value)
+        self.assertIs(f.result(), mac.return_value if wanted else wrapped.return_value)
         self.assertEqual(mac.called, wanted)
         self.assertEqual(ipc.called, not wanted)

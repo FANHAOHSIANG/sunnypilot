@@ -168,7 +168,7 @@ class ClientConnection:
       background_thread()
       if state().get('transport') == 'usb-direct':
         from openpilot.selfdrive.modeld.jetlink.direct import DirectClient
-        client = AsyncClient(DirectClient())
+        client = DirectClient()
       else:
         client = AsyncClient(Client())
       future.set_result(client)

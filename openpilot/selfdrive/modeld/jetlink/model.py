@@ -11,6 +11,7 @@ from openpilot.selfdrive.modeld.jetlink.recovery import Recovery, HOLD_FRAME, DR
 from openpilot.selfdrive.modeld.jetlink.contracts import model_name, parse_outputs, V3_SPEC
 from openpilot.selfdrive.modeld.jetlink.gate import may_join
 from openpilot.selfdrive.modeld.jetlink.artifact import load_prepared, save_prepared, stream_abi
+from openpilot.selfdrive.modeld.jetlink.warp_runtime import make_coherent, prepare_small_reset
 
 from openpilot.common.jetlink_status import MODEL_STATUS
 
@@ -52,6 +53,7 @@ class Warp:
       if value['identity'] != (width, height, self.size, SPEC.sha256):
         raise ValueError('prepared Jetlink warp contract mismatch')
       self.run_warp = value['warp']
+      self._prepare_output()
       self.init_timings = (inputs_ready - started, time.monotonic() - inputs_ready, time.thread_time() - cpu_started)
       return
     from tinygrad import Tensor, TinyJit
@@ -69,6 +71,30 @@ class Warp:
       result = self.run_warp(**self.inputs, **dummy).numpy()
       if result.shape != SPEC.warped_shape or result.dtype != np.uint8:
         raise ValueError('unexpected camera warp contract')
+    self._prepare_output()
+
+  def _prepare_output(self):
+    from tinygrad import Tensor, Device
+    self._device = Device['QCOM']
+    captured = self.run_warp.captured
+    expected = ['big_frame', 'big_tfm', 'frame', 'tfm']
+    if list(captured.expected_names) != expected:
+      raise ValueError('HKG warp input ABI changed')
+    out = captured.ret._buffer()
+    if out.device != 'QCOM' or out.nbytes != SPEC.warped_nbytes:
+      raise ValueError('HKG warp output ABI changed')
+    make_coherent(out, self._device)
+    # This fork already warmed the JIT. Relink after moving its output, before
+    # any live frame; upstream moves it before its first link instead.
+    captured.__dict__.pop('linear', None)
+    dummy = {k: Tensor(np.zeros(self.size, np.uint8), device='QCOM').realize() for k in ('frame', 'big_frame')}
+    for _ in range(2):
+      self.run_warp(**self.inputs, **dummy)
+    self._device.synchronize()
+    self._output_array = np.frombuffer(out.as_memoryview(allow_zero_copy=True), np.uint8).reshape(SPEC.warped_shape)
+    self._bindings = {}
+    self._input_names = expected
+
   def save_prepared(self, path, width, height):
     from tinygrad import Tensor
     save_prepared({'identity': (width, height, self.size, SPEC.sha256), 'warp': self.run_warp}, path)
@@ -98,17 +124,27 @@ class Warp:
       if cache_key not in self.blobs:
         if len(self.blobs) >= 64:
           self.blobs.clear()
+          self._bindings.clear()
         self.blobs[cache_key] = Tensor.from_blob(source.ctypes.data, (self.size,), dtype='uint8', device='QCOM')
       frames[arg] = self.blobs[cache_key]
     self.transforms['tfm'][:] = transforms['img']
     self.transforms['big_tfm'][:] = transforms['big_img']
     prepared = time.monotonic()
-    self._output = self.run_warp(**self.inputs, **frames)
+    binding = tuple(frames[k].uop.base for k in ('big_frame', 'frame'))
+    if binding not in self._bindings:
+      self._output = self.run_warp(**self.inputs, **frames)  # check each new camera buffer once
+      args = dict(self.inputs, **frames)
+      if len(self._bindings) >= 64:
+        self._bindings.clear()
+      self._bindings[binding] = [args[name].uop.base for name in self._input_names]
+    else:
+      self._output = self.run_warp.captured(self._bindings[binding], {})
     submitted = time.monotonic()
     self._times = (started, prepared, submitted)
 
   def wait(self):
-    output = self._output.numpy()
+    self._device.synchronize()
+    output = self._output_array
     started, prepared, submitted = self._times
     self.timings = (prepared - started, submitted - prepared, time.monotonic() - submitted)
     return output
@@ -153,12 +189,14 @@ class JoiningModel:
     self.views = {name: a.reshape(shape) for (name, shape), a in zip(
       SPEC.packed_shapes.items(), np.split(self.packed, np.cumsum(SPEC.packed_sizes[:-1])), strict=True)}
     self.prev_desire = np.zeros(8, np.float32)
+    self.reset_small = None
 
   def prepare(self):
     """Never compile or warm a second QCOM program beside live inference."""
     from openpilot.common.swaglog import cloudlog
     self._publish_status(phase='preparing')
     try:
+      self.reset_small = prepare_small_reset(self.small)
       self.warp = Warp(*self.warp_size, input_buffers=self.warp_inputs)
     except Exception as exc:
       self.prepare_error = str(exc)
@@ -228,11 +266,15 @@ class JoiningModel:
 
   def _remember(self, result):
     self.last_output = result.copy()
-    self.last_output_at = self.client.output_at if isinstance(self.client, AsyncClient) else time.monotonic()
+    self.last_output_at = (self.client.output_at if isinstance(self.client, AsyncClient) or
+                           getattr(self.client, 'pipeline', False) is True else time.monotonic())
     if 'prev_feat' in self.views:
       self.views['prev_feat'][:] = result[self.spec.output_slices['hidden_state']]
 
   def _reset_small(self):
+    if getattr(self, 'reset_small', None) is not None:
+      self.reset_small()
+      return
     self.small.prev_desire[:] = 0
     for array in self.small.npy.values():
       array[:] = 0
@@ -285,7 +327,7 @@ class JoiningModel:
           self.warp.start(bufs, transforms)
         completed = None
         self.last_frame = dict(proving_frame=self.recovery.frames + 1)
-        if isinstance(self.client, AsyncClient):
+        if isinstance(self.client, AsyncClient) or getattr(self.client, 'pipeline', False) is True:
           completed = self.client.take_ready()
           if completed is not None:
             self._remember(completed)
@@ -301,7 +343,16 @@ class JoiningModel:
         images = self.warp.wait() if split_warp else self.warp(bufs, transforms)
         warped_at = time.monotonic()
         try:
-          if isinstance(self.client, AsyncClient):
+          if getattr(self.client, 'pipeline', False) is True:
+            result = self.client.infer_frame(images, self.packed, self.frame, self.reset,
+                                             started + HOLD_FRAME, after_enqueue)
+            # A late earlier reply can arrive while waiting for this frame.
+            # Keep its fresh output for a hold, as zoompilot's last_output does.
+            if result is None:
+              completed = self.client.take_ready()
+              if completed is not None:
+                self._remember(completed)
+          elif isinstance(self.client, AsyncClient):
             result = self.client.infer(images, self.packed, self.frame, self.reset, deadline=started + HOLD_FRAME)
           else:
             result = self.client.infer(images, self.packed, self.frame, self.reset)
@@ -320,6 +371,8 @@ class JoiningModel:
         self.last_frame.update(held=held, output_age_ms=(time.monotonic() - self.last_output_at) * 1000.)
         if isinstance(self.client, AsyncClient):
           self.last_frame['usb_direct'] = getattr(self.client.client, 'metrics', {})
+        elif getattr(self.client, 'pipeline', False) is True:
+          self.last_frame['usb_direct'] = self.client.metrics
         was_proving = self.recovery.proving
         self.recovery.note(held, time.monotonic(), self.last_output_at)
         if was_proving and not self.recovery.proving:

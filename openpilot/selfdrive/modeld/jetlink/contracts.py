@@ -4,6 +4,8 @@ import math
 from pathlib import Path
 import re
 
+import numpy as np
+
 from jetlink.spec import ModelSpec
 
 DEFAULT_SPEC = ModelSpec.from_dict(json.loads(Path(__file__).with_name('cinque_v2.json').read_text()))
@@ -97,6 +99,8 @@ def parse_outputs(parser, spec, result):
   validate_model_spec(spec)
   if result.shape != (spec.output_nelem,):
     raise ValueError('Jetlink output length does not match model contract')
+  if not np.all(np.isfinite(result)):
+    raise ValueError('Jetlink raw output is not finite')
   outputs = {name: result[None, at] for name, at in spec.output_slices.items()}
   # Older queued exports use five plan hypotheses; publishing still consumes
   # the selected 33 x 15 plan, as it does for the direct-plan exports.
@@ -106,5 +110,8 @@ def parse_outputs(parser, spec, result):
     outputs = parser.parse_vision_outputs(outputs)
     parser.parse_categorical_crossentropy('desire_state', outputs, out_shape=(8,))
     outputs.update(plan=plan, plan_stds=stds)
-    return outputs
-  return parser.parse_outputs(outputs)
+  else:
+    outputs = parser.parse_outputs(outputs)
+  if any(not np.all(np.isfinite(value)) for value in outputs.values()):
+    raise ValueError('Jetlink parsed output is not finite')
+  return outputs

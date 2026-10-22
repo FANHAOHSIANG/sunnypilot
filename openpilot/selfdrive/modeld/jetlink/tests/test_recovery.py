@@ -186,6 +186,32 @@ class AsyncTests(unittest.TestCase):
 class ModelRecoveryTests(unittest.TestCase):
   setUp = test_port.ModelTransitionTests.setUp
 
+  def test_direct_pipeline_publishes_health_after_send_and_uses_late_reply_for_hold(self):
+    a = self.adapter
+    order = []
+    image = np.zeros(test_port.DEFAULT_SPEC.warped_shape, np.uint8)
+    raw = np.zeros(test_port.DEFAULT_SPEC.output_nelem, np.float32)
+    a.warp = SimpleNamespace(start=lambda *args: order.append('start'),
+                             wait=lambda: (order.append('wait') or image))
+    c = SimpleNamespace(pipeline=True, output_at=10., metrics={}, close=Mock())
+    c.take_ready = Mock(side_effect=[None, raw])
+    def infer(img, packed, frame, reset, deadline, health):
+      self.assertIs(img, image)
+      self.assertIs(packed, a.packed)
+      self.assertAlmostEqual(deadline, 10.096)
+      order.append('send')
+      health()
+      return None
+    c.infer_frame = infer
+    a.client, a.active, a.join_allowed = c, True, False
+    a.recovery.frames = 21
+    with patch.object(model.time, 'monotonic', return_value=10.05):
+      self.assertIn('plan', a.run({}, {}, self.inputs, lambda: order.append('health')))
+    self.assertEqual(order, ['start', 'wait', 'send', 'health'])
+    self.assertEqual(a.last_output_at, 10.)
+    self.local.run.assert_not_called()
+    self.assertTrue(a.active)
+
   def test_warp_starts_before_drain_and_waits_before_usb_submission(self):
     a = self.adapter
     order = []

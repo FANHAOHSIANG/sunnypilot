@@ -16,7 +16,7 @@ import numpy as np
 
 from openpilot.selfdrive.modeld.jetlink.link import SOCKET, receive, send
 from openpilot.selfdrive.modeld.jetlink.contracts import validate_model_spec
-from jetlink.client import JetlinkClient
+from openpilot.selfdrive.modeld.jetlink.pipeline import PipelineClient as JetlinkClient
 from jetlink.spec import ModelSpec
 from jetlink.transport.ffs import FfsTransport
 from jetlink.transport.priority import background_thread
@@ -139,11 +139,15 @@ def serve_mac(listener, client, transport, owner, publish, attached):
 
 
 class DirectClient:
-  """Synchronous USB exchange used by AsyncClient's single IO worker."""
+  """Exclusive USB data endpoints; AIO send and bounded reply waits in modeld."""
+  pipeline = True
   def __init__(self, path=SOCKET, timeout=.15):
     self.timeout = timeout
     self.timings = (0, 0, 0)
     self.metrics = {}
+    self.output_at = 0.
+    self.sent = False
+    self._verified_frame = None
     self.transport = None
     self._io_lock = threading.Lock()
     self._rpc_lock = threading.Lock()
@@ -204,6 +208,66 @@ class DirectClient:
                             server_us=list(self.client.last_timings),
                             send=transport_stat(self.client, 'last_send'),
                             receive=transport_stat(self.client, 'last_receive'))
+
+  def _verified_output(self):
+    from openpilot.selfdrive.modeld.jetlink.daemon import require_selected
+    if self.client.last_output is None:
+      return None
+    if self._verified_frame == self.client.output_frame:
+      return None
+    state = self.client.last_state
+    if not isinstance(state, dict) or 'loaded' not in state:
+      # Older Mac apps put only temperatures in INFER_RESP. Keep their
+      # identity check, bounded by this output's remaining hard deadline.
+      left = self.timeout - (time.monotonic() - self.client.output_at)
+      if left <= 0:
+        raise TimeoutError('Jetlink model identity deadline exceeded')
+      state = self.client.state(timeout=left)
+    require_selected(state, self.spec)
+    self._verified_frame = self.client.output_frame
+    self.output_at = self.client.output_at
+    self.timings = self.client.last_timings
+    return self.client.last_output.copy()  # sunnypilot's parser mutates arrays
+
+  def take_ready(self):
+    with self._io_lock:
+      if self._closed.is_set():
+        raise ConnectionError('USB lease closing')
+      self.client.drain()
+      return self._verified_output()
+
+  def infer_frame(self, image, packed, frame, reset, deadline, after_enqueue=None):
+    """Camera-thread AIO send/soft wait, following zoompilot's frame pipeline.
+
+    io_submit owns the input bytes before returning. No worker retains an
+    image buffer that the next GPU warp could overwrite.
+    """
+    from openpilot.selfdrive.modeld.jetlink.daemon import transport_stat
+    if image.dtype != np.uint8 or image.shape != self.spec.warped_shape or not image.flags.c_contiguous:
+      raise ValueError('invalid warped image')
+    if packed.dtype != np.float32 or packed.size != self.spec.packed_nelem or not packed.flags.c_contiguous or not np.all(np.isfinite(packed)):
+      raise ValueError('invalid recurrent input')
+    with self._io_lock:
+      if self._closed.is_set():
+        raise ConnectionError('USB lease closing')
+      started = time.monotonic()
+      try:
+        seq = self.client.infer_begin(image, packed, frame, reset=reset, want_state=True,
+                                      skip_if_busy=self.client.last_output is not None)
+        self.sent = seq is not None
+        if after_enqueue is not None:
+          after_enqueue()
+        if seq is None:
+          return None
+        hold = max(0., deadline - time.monotonic()) if self.client.last_output is not None else None
+        output = self.client.infer_end(seq, hold=hold)
+        return self._verified_output() if output is not None else None
+      finally:
+        self.metrics = dict(frame=frame, output_frame=self.client.output_frame,
+                            pending=len(self.client.pending), sent=self.sent,
+                            exchange_ms=(time.monotonic() - started) * 1000,
+                            server_us=list(self.client.last_timings),
+                            send=transport_stat(self.client, 'last_send'), receive=transport_stat(self.client, 'last_receive'))
 
   def close(self):
     if self._closed.is_set():
