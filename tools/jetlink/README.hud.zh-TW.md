@@ -1,13 +1,15 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
-## 暫時撤下 C4 畫面開關（2026-10-23）
+## 改用原生 C4 畫面開關（2026-10-23）
 
 實機回報在「功能開關」頁滑動、尚未按到 HUD 時，畫面回到逗號並卡住。
 目前沒有取得當下的錯誤堆疊，不能確定是 UI 退出或整機重啟，也未確定根因。
-先將 C4 功能開關頁與繁體中文翻譯恢復到加入 HUD 按鈕前的版本，
-暫時不載入新增 HUD 卡片。這是回退措施，不是已驗證的根因修復。
-HUD 資料通道、免重啟的指令開關及既有啟用狀態保留。
-更新後需重啟一次載入回退版本；目前請使用下方指令管理 HUD。
+使用者確認回退設定頁後不再發生。本版重新加入名稱為 `HUD` 的原生 `BigToggle`，
+與「公制單位」使用相同元件，位於 Jetlink 開關後方。
+移除先前的自訂 HUD 元件，不新增副標題、說明彈窗或翻譯；不在每幀繪圖時讀取 HUD 設定檔。
+停車時可操作，切換立即生效；設定讀寫失敗會顯示 `HUD: error` 並恢復實際儲存狀態。
+HUD 資料通道、指令開關及既有啟用狀態保留。更新程式需重啟一次，其後開關無須重啟。
+這是縮小 UI 差異的新實作，尚未驗證實機，也不是已確認根因的修復。
 
 基底：`FANHAOHSIANG/sunnypilot` 的 `hkg-enhanced-jetlink`
 `b2d7f2893ce76231a8de7014379c676ecf8b542e`。獨立分支：`hkg-enhanced-jetlink-hud`。
@@ -46,7 +48,8 @@ USB 額外負載仍需實測，不能把離線測試視為即時性保證。
 2. 在 C4 停妥、熄火且保持供電時檢查 `git status --short`。
    若有修改先保存並確認用途；不要強制 reset、checkout 或覆蓋。
    取得本測試分支並切換後，先讓正常編譯完成，再檢查 Jetlink 關閉 HUD 時仍正常。
-3. 畫面按鈕暫時撤下。在本測試分支、offroad 使用指令開關，無須重啟：
+3. 在 C4「設定 → 功能開關」找到 Jetlink 旁的 `HUD`，停車時點擊開啟。
+   開關無須重啟；也可在本測試分支、offroad 使用指令：
 
 ```sh
 cd /data/openpilot
@@ -79,10 +82,14 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-`d4eb22dd3` 加入免重啟開關時，C4 端 54 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
+本版 C4 端 52 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
 另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
-以及 UI／指令共用設定、行駛中鎖定與寫入失敗處理；UI 測試以替身取代繪圖元件。
+以及指令共用設定與行駛中鎖定。
+另有 5 項 UI 測試使用實際 Widget、BigToggle、UnifiedLabel、NavScroller 與觸控辨識流程，
+涵蓋滑動不誤觸、260 幀滑動繪圖不讀寫設定、點擊即時開關、重新開頁同步指令設定、
+行車鎖定、讀寫失敗及恢復。圖形呼叫、字型／資產、時鐘與車況 IPC 使用替身；
+這些測試沒有執行真實 GPU／字型渲染，也不能替代 C4 實體螢幕驗證。
 先前 Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）；本次未修改 Mac 端。
 另以 pinned Carrot parser 驗證合成的 20 m/s 車速 → 72 km/h、設定 90 km/h、
 17 點路徑與前車、latActive=true。這是合成資料測試，不是實車紀錄或完整畫面測試。
@@ -93,6 +100,7 @@ PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdriv
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud_toggle.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_direct.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_pipeline.py' -v
+PYTHONPATH=.:third_party/jetlink python -m unittest discover -s tools/jetlink/tests -p 'test_hud_ui.py' -v
 ```
 
 本版參考 Carrot `7e371b92` 的 HUD publisher/receiver 分層與 `carrotMAC-HUD`

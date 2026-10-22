@@ -1,5 +1,4 @@
 """Live HUD lifecycle and settings, without USB or a graphics context."""
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -8,21 +7,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from openpilot.selfdrive.modeld.jetlink import hud, hud_publisher
-
-
-class FakeToggle:
-  def __init__(self, text, value, initial_state, toggle_callback, **kwargs):
-    self.checked = initial_state
-    self.callback = toggle_callback
-
-  def set_enabled(self, predicate):
-    self.enabled = predicate
-
-  def set_checked(self, value):
-    self.checked = value
-
-  def _update_state(self):
-    pass
 
 
 class HudToggleTests(unittest.TestCase):
@@ -128,50 +112,6 @@ class HudToggleTests(unittest.TestCase):
       sm.update.assert_called_once_with(0)
     self.assertFalse(self.packet.exists())
     self.assertFalse(self.packet.with_suffix('.tmp').exists())
-
-  def make_toggle(self):
-    state = SimpleNamespace(started=False, params=self.params)
-    app = Mock()
-    modules = {
-      'openpilot.selfdrive.ui.mici.widgets.button': SimpleNamespace(BigToggle=FakeToggle),
-      'openpilot.selfdrive.ui.mici.widgets.dialog': SimpleNamespace(BigDialog=lambda title, description: (title, description)),
-      'openpilot.selfdrive.ui.ui_state': SimpleNamespace(ui_state=state),
-      'openpilot.system.ui.lib.application': SimpleNamespace(gui_app=app),
-      'openpilot.system.ui.lib.multilang': SimpleNamespace(tr=lambda value: value),
-    }
-    path = Path(__file__).resolve().parents[3] / 'ui/mici/widgets/jetlink_hud.py'
-    spec = importlib.util.spec_from_file_location('hud_toggle_under_test', path)
-    module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, modules):
-      spec.loader.exec_module(module)
-    return module.JetlinkHudToggle(), state, app
-
-  def test_ui_preserves_existing_setting_and_tracks_cli_changes(self):
-    self.marker.touch()
-    toggle, _, app = self.make_toggle()
-    self.assertTrue(toggle.checked)
-    self.assertTrue(toggle.enabled())
-    toggle.callback(False)
-    self.assertFalse(toggle.checked)
-    self.assertFalse(self.marker.exists())
-    self.assertEqual(app.push_widget.call_args.args[0][0], 'HUD setting saved')
-    hud.set_enabled(True, self.params)
-    toggle._update_state()
-    self.assertTrue(toggle.checked)
-
-  def test_ui_rechecks_started_and_recovers_from_write_failure(self):
-    toggle, state, app = self.make_toggle()
-    state.started = True
-    self.assertFalse(toggle.enabled())
-    toggle.callback(True)
-    self.assertFalse(self.marker.exists())
-    self.assertFalse(toggle.checked)
-    self.assertEqual(app.push_widget.call_args.args[0][0], 'HUD setting unchanged')
-    state.started = False
-    with patch.object(hud, 'set_enabled', side_effect=OSError('read-only storage')):
-      toggle.callback(True)
-    self.assertFalse(toggle.checked)
-    self.assertEqual(app.push_widget.call_args.args[0][0], 'HUD setting not saved')
 
 
 if __name__ == '__main__':
