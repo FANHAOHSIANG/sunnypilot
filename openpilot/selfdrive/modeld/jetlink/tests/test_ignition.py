@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 path = Path(__file__).resolve().parents[1] / "ignition.py"
 spec = importlib.util.spec_from_file_location("jetlink_ignition", path)
@@ -160,6 +161,26 @@ class TestBackgroundConnection(unittest.TestCase):
     for value in (float("nan"), float("inf")):
       self.vehicle.data["carState"].vEgo = value
       self.assertFalse(self.allowed())
+
+  def test_messages_arriving_during_update_are_not_from_the_future(self):
+    clock = [100.1]
+    def receive(timeout):
+      self.assertEqual(timeout, 0)
+      # A producer runs while SubMaster polls/decodes its newest messages.
+      self.vehicle.logMonoTime = dict.fromkeys(module.CONNECTION_SERVICES, 100_105_000_000)
+      clock[0] = 100.11
+    self.vehicle.update = receive
+    with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]):
+      self.assertTrue(module.connection_allowed(self.params, self.hardware, self.vehicle))
+
+  def test_post_update_clock_still_rejects_actually_future_messages(self):
+    clock = [100.1]
+    def receive(timeout):
+      self.vehicle.logMonoTime = dict.fromkeys(module.CONNECTION_SERVICES, 100_200_000_000)
+      clock[0] = 100.11
+    self.vehicle.update = receive
+    with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]):
+      self.assertFalse(module.connection_allowed(self.params, self.hardware, self.vehicle))
 
 if __name__ == "__main__":
   unittest.main()
