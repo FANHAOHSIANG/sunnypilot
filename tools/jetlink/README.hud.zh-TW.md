@@ -1,5 +1,14 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
+## 暫時撤下 C4 畫面開關（2026-10-23）
+
+實機回報在「功能開關」頁滑動、尚未按到 HUD 時，畫面回到逗號並卡住。
+目前沒有取得當下的錯誤堆疊，不能確定是 UI 退出或整機重啟，也未確定根因。
+先將 C4 功能開關頁與繁體中文翻譯恢復到加入 HUD 按鈕前的版本，
+暫時不載入新增 HUD 卡片。這是回退措施，不是已驗證的根因修復。
+HUD 資料通道、免重啟的指令開關及既有啟用狀態保留。
+更新後需重啟一次載入回退版本；目前請使用下方指令管理 HUD。
+
 基底：`FANHAOHSIANG/sunnypilot` 的 `hkg-enhanced-jetlink`
 `b2d7f2893ce76231a8de7014379c676ecf8b542e`。獨立分支：`hkg-enhanced-jetlink-hud`。
 2026-10-23 已合併 `hkg-enhanced-jetlink` 的 `d87715b5f`：Mac protocol 3
@@ -37,10 +46,7 @@ USB 額外負載仍需實測，不能把離線測試視為即時性保證。
 2. 在 C4 停妥、熄火且保持供電時檢查 `git status --short`。
    若有修改先保存並確認用途；不要強制 reset、checkout 或覆蓋。
    取得本測試分支並切換後，先讓正常編譯完成，再檢查 Jetlink 關閉 HUD 時仍正常。
-3. C4 開啟「設定 → 功能開關（toggles）→ 外接 HUD（external HUD）」，
-   位於 Jetlink 開關後面。僅在 offroad 可修改，無須重啟；資料更新以 5 Hz 週期生效。
-   開關沿用 `/data/jetlink-hud.enabled`，先前用指令啟用的設定會保留。
-   也可在本測試分支、offroad 使用原有指令：
+3. 畫面按鈕暫時撤下。在本測試分支、offroad 使用指令開關，無須重啟：
 
 ```sh
 cd /data/openpilot
@@ -62,7 +68,7 @@ python tools/jetlink/hud_config.py --enable
 ## 還原
 
 停車 offroad 執行 `python tools/jetlink/hud_config.py --disable`，無須重啟。
-也可直接關閉 C4 設定頁的「外接 HUD」。這控制資料傳送，不是螢幕電源；
+這控制資料傳送，不是螢幕電源；
 Mac 既有畫面會在資料過期後進入無資料狀態。重新開啟後，連線正常即可恢復。
 首次安裝這版程式仍需重啟一次，讓正在執行的 UI／Jetlink 載入新程式。
 需要完全還原時切回原 `hkg-enhanced-jetlink`（先確認工作目錄無未保存修改）。
@@ -73,7 +79,7 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-加入免重啟開關後，C4 端 54 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
+`d4eb22dd3` 加入免重啟開關時，C4 端 54 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
 另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
 以及 UI／指令共用設定、行駛中鎖定與寫入失敗處理；UI 測試以替身取代繪圖元件。
