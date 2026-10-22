@@ -310,6 +310,7 @@ class JoiningModel:
         was_proving = self.recovery.proving
         self.recovery.note(held, time.monotonic(), self.last_output_at)
         if was_proving and not self.recovery.proving:
+          cloudlog.warning('Jetlink proving passed: %s %s', model_name(self.spec), self.spec.sha256)
           self._write_proving()
           if self.join_allowed:
             FAULT.unlink(missing_ok=True)
@@ -319,7 +320,7 @@ class JoiningModel:
         self.reset = False
         self.inference_ms = (time.monotonic() - started) * 1000.
         if not self.active:
-          cloudlog.warning('Jetlink active: %s %s', model_name(self.spec), self.spec.sha256)
+          cloudlog.warning('Jetlink proving started: %s %s', model_name(self.spec), self.spec.sha256)
           self.error = ''
           self.next_status = 0
           self.handover_at = time.monotonic()

@@ -49,5 +49,6 @@ jobs:
       - run: python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
       - run: PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
       - run: PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
+      - run: |
+          PYTHONPATH=third_party/jetlink:third_party/jetlink/tests python -m pytest -q -c /dev/null -o markers='real_aio: exercise Linux AIO syscalls' third_party/jetlink/tests/test_aio.py third_party/jetlink/tests/test_ffs.py third_party/jetlink/tests/test_ffs_send.py third_party/jetlink/tests/test_ffs_compat.py
       - run: python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/ui/sunnypilot openpilot/selfdrive/ui/ui_state.py openpilot/selfdrive/ui/mici openpilot/selfdrive/modeld/modeld.py openpilot/selfdrive/selfdrived/selfdrived.py openpilot/sunnypilot/selfdrive/selfdrived/events.py openpilot/common/jetlink_status.py
-

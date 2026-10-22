@@ -22,6 +22,7 @@ from openpilot.selfdrive.modeld.jetlink.contracts import model_name, validate_mo
 from jetlink.client import JetlinkClient
 from jetlink.transport.ffs import FfsTransport
 from openpilot.selfdrive.modeld.jetlink.cable import accept_phone, PersistentIOSGadget, wait_retry
+from openpilot.selfdrive.modeld.jetlink.bulk import PersistentBulkGadget
 
 GADGET = '/sys/kernel/config/usb_gadget/jetlink'
 USB_DATA_ROLE = Path('/sys/class/usbpd/usbpd0/current_dr')
@@ -39,6 +40,8 @@ class SafeTransport(FfsTransport):
     reader = getattr(self, '_reader', None)
     watchdog = getattr(getattr(self, '_write_guard', None), 'thread', None)
     super().close()
+    if getattr(self, 'cleanup_incomplete', False):
+      raise UnsafeCleanupError('USB AIO cleanup did not finish; reboot before retrying')
     if any(t is not None and t.is_alive() for t in (reader, watchdog)):
       raise UnsafeCleanupError('USB cleanup left an active thread; reboot offroad before retrying')
     if Path(GADGET, 'UDC').read_text().strip():
@@ -84,6 +87,8 @@ def cleanup(transport):
   reader = getattr(transport, '_reader', None)
   watchdog = getattr(getattr(transport, '_write_guard', None), 'thread', None)
   transport.close()
+  if getattr(transport, 'cleanup_incomplete', False):
+    raise UnsafeCleanupError('USB AIO cleanup did not finish; reboot before retrying')
   if any(t is not None and t.is_alive() for t in (reader, watchdog)):
     raise UnsafeCleanupError('USB cleanup left an active thread; reboot offroad before retrying')
   if Path(GADGET, 'UDC').read_text().strip():
@@ -150,13 +155,19 @@ def prepare_selected(client, peer, setup_allowed):
     client._should_stop = lambda: False
 
 
+def transport_stat(client, key):
+  value = getattr(getattr(client, 't', None), key, None)
+  return dict(value) if isinstance(value, dict) else {}
+
+
 def serve_local(listener, client):
   spec = validate_model_spec(client.spec)
   last_status = last_ping = 0.
+  last_usb = {}
   while host_attached():
     now = time.monotonic()
     if now - last_status >= 1:
-      publish('ready', spec=spec, timings=list(client.last_timings))
+      publish('ready', spec=spec, timings=list(client.last_timings), usb_io=last_usb)
       last_status = now
     try:
       connection, _ = listener.accept()
@@ -173,7 +184,7 @@ def serve_local(listener, client):
         send(connection, json.dumps({'spec': spec.to_dict()}).encode())
         while host_attached():
           if time.monotonic() - last_status >= 1:
-            publish('ready', spec=spec, timings=list(client.last_timings))
+            publish('ready', spec=spec, timings=list(client.last_timings), usb_io=last_usb)
             last_status = time.monotonic()
           try:
             request = reader.receive(connection)
@@ -189,7 +200,16 @@ def serve_local(listener, client):
           packed = np.frombuffer(request, np.float32, spec.packed_nelem, REQUEST.size + spec.warped_nbytes)
           if not np.all(np.isfinite(packed)):
             raise ValueError('Nonfinite local model input')
-          output = infer_selected(client, spec, images, packed, frame, bool(reset))
+          exchange_started = time.monotonic()
+          try:
+            output = infer_selected(client, spec, images, packed, frame, bool(reset))
+          finally:
+            last_usb = dict(frame=frame, exchange_ms=(time.monotonic() - exchange_started) * 1000,
+                            send=transport_stat(client, 'last_send'),
+                            receive=transport_stat(client, 'last_receive'),
+                            totals=transport_stat(client, 'send_totals'))
+            if last_usb['exchange_ms'] >= 100:
+              log.warning('Jetlink USB exchange: %s', json.dumps(last_usb))
           send_parts(connection, REPLY.pack(frame, *client.last_timings), output)
       except (ConnectionError, BrokenPipeError, ValueError) as exc:
         log.info('Local client ended: %s', exc)
@@ -223,6 +243,8 @@ def main():
   listener.settimeout(.05)
   blocked = None
   ios_gadget = PersistentIOSGadget()
+  bulk_gadget = PersistentBulkGadget()
+  vm_applied = False
   try:
     while True:
       if blocked:
@@ -249,6 +271,16 @@ def main():
       transport = None
       try:
         publish('connecting')
+        if not vm_applied:
+          # Read buffers still allocate in FunctionFS. Use the upstream
+          # dirty/free-page policy in both Mac bulk and iOS modes, once per
+          # daemon lifetime; record stock values before touching them.
+          vm_applied = True
+          try:
+            root_command(['bash', str(ios_setup), 'vm', 'apply'])
+          except Exception as exc:
+            blocked = 'USB memory policy could not be applied: ' + str(exc)[:200]
+            raise
         functions = Path(GADGET, 'functions')
         allowed = {'ffs.jetlink', 'ncm.usb0'} if ios_mode else {'ffs.jetlink'}
         if functions.exists() and any(p.name not in allowed for p in functions.iterdir()):
@@ -267,8 +299,10 @@ def main():
           transport = accept_phone(setup_allowed, host_attached, publish)
         else:
           setup = VENDOR.parents[1] / 'tools' / 'jetlink' / 'setup_gadget.sh'
-          root_command(['bash', str(setup)])
-          transport = SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc)
+          bulk_gadget.ensure(
+            lambda: root_command(['bash', str(setup)]),
+            lambda: SafeTransport('/dev/ffs-jetlink', gadget=GADGET, udc=udc))
+          transport = bulk_gadget.borrow()
         if not setup_allowed():
           raise RuntimeError('Vehicle left the permitted setup state during USB setup')
         transport.protocol_version = 3
@@ -297,19 +331,28 @@ def main():
             if transport is not None:
               transport.close()
           else:
-            cleanup(transport)
+            if transport is not None:
+              transport.close()  # releases only the borrowed data endpoints
         except Exception as exc:
           blocked = str(exc)[:300]
           publish('blocked', error=blocked)
       wait_retry(host_attached)
   finally:
-    if ios_gadget.owner is not None:
-      cleanup(ios_gadget.owner)
-    listener.close()
-    Path(SOCKET).unlink(missing_ok=True)
-    publish('stopped')
+    try:
+      if ios_gadget.owner is not None:
+        cleanup(ios_gadget.owner)
+      if bulk_gadget.owner is not None:
+        cleanup(bulk_gadget.owner)
+    finally:
+      if vm_applied:
+        try:
+          root_command(['bash', str(ios_setup), 'vm', 'restore'])
+        except Exception:
+          log.exception('Could not restore USB memory policy; reboot restores kernel defaults')
+      listener.close()
+      Path(SOCKET).unlink(missing_ok=True)
+      publish('stopped')
 
 
 if __name__ == '__main__':
   main()
-

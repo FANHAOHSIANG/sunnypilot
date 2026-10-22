@@ -179,3 +179,37 @@ error 現在區分第幾個 proving frame、連續保留或十秒視窗累積保
 total_ms、output_age_ms、held 與 drained_reply，回退後也不被成功小模型覆蓋。
 warp_pack_ms 包含 drain／輸入打包及影像轉換；ipc_wait_ms 是本幀等待時間，
 不是前一個請求完整往返時間。實際頻率與改善程度仍需 C4 紀錄確認。
+
+## USB 非同步傳輸與常駐控制端點
+
+依 zoompilot develop 632b0b0／Jetlink b1d7041 移植 FunctionFS AIO：
+每個請求使用 8 KB 寫入緩衝，一幀以多個請求批次提交，限制佇列為 1 MB。
+取代原本每次由 512 KB 起跳、配置失敗才縮小的同步 writev，避免大型
+連續實體記憶體配置與逐次同步寫入造成的停頓。此項效果仍需 AGNOS 4.9
+實機測量；Linux x86 AIO 測試不能代替 C4 的 USB 控制器驗證。
+
+Mac 模式加入常駐 ep0 owner：同一 daemon 只執行一次 gadget 建立，推論
+session 使用 upstream borrowed 資料端點。模型退回小模型、IPC 重連時
+維持既有 USB session；USB session 真正結束時先清理寫入、解除控制器
+綁定讓待讀請求完成、關閉資料端點，再綁回同一 owner。這種情況仍會有
+一次重新列舉，不是宣稱完全不斷線。清理未完成會封鎖重連並要求重啟。
+保留 ep0 至 daemon 結束；iOS 仍保留原有 NCM owner，TCP 失敗不拆 NCM。
+這是同一 daemon 內的單一 owner，沿用 flock 排他鎖，尚非上游完整
+跨程序 Owner/lease/provision 架構；本機 socket 推論轉送目前仍保留。
+
+daemon 連線前呼叫既有 ios-root.sh 的 vm apply（Mac/iOS 均適用），
+設定 dirty_bytes=16 MB、dirty_background_bytes=8 MB、extra_free_kbytes=32 MB
+與 USB TCP socket 上限；先保存原值，正常退出還原，重開機也恢復預設。
+主要用來降低 FunctionFS 讀取時的直接記憶體回收停頓，不是提高 min_free。
+
+連線狀態新增 usb_io：frame、exchange_ms、send 的 submit_ms/wait_ms/
+backlog_ms/chunk，以及 receive 與整個 session 的累積 maxima。
+exchange_ms 包含傳輸、外部推論與身分核對，不等同單純 USB 時間；
+receive.read_wait 可能包含讀取開始後等待下一個請求的空閒時間，不能
+單獨解讀為該幀往返延遲。超過 100 ms 的 exchange 另寫入日誌。
+日誌明確區分 proving started 與 proving passed，不再以 active 一詞
+混淆首次回覆與完成 20 幀驗證。模型失效回退、控制權與驗證門檻未放寬。
+
+對照 carrot-wip 4920f270b56ad472c2f90ddf24f2643b19e7af37：其 adapter
+仍使用本機 socket 與同步 FunctionFS 寫入；本次採用 zoompilot 的 AIO
+傳輸修正，保留 Carrot 衍生的逐連線 v2/v3 協定與完整輸出驗證。

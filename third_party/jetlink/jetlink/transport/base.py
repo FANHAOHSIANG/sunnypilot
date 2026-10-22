@@ -241,7 +241,7 @@ class StreamTransport(Transport):
 
   # -- framing -------------------------------------------------------------
 
-  def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
+  def _frame(self, msg_type: int, seq: int, parts=(), flags: int = 0) -> list[memoryview]:
     P = self.wire_protocol
     self._lock_protocol_version()
     multiple = P.packet_multiple(self.protocol_version) if hasattr(P, 'packet_multiple') else P.PACKET_MULTIPLE
@@ -262,6 +262,10 @@ class StreamTransport(Transport):
     else:
       header = P.pack_header(msg_type, seq, length, flags, version=self.protocol_version)
     bufs.insert(0, memoryview(header))
+    return bufs
+
+  def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
+    bufs = self._frame(msg_type, seq, parts, flags)
     self._send_deadline = None if timeout is None else time.monotonic() + timeout
     try:
       while bufs:
