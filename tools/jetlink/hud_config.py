@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from openpilot.selfdrive.modeld.jetlink.hud import ENABLE, PACKET
+from openpilot.selfdrive.modeld.jetlink.hud import ENABLE, PACKET, set_enabled
 
 
 def main():
@@ -20,14 +20,14 @@ def main():
     return
   from openpilot.common.params import Params
   params = Params()
-  if params.get_bool('IsOnroad') or not params.get_bool('IsOffroad'):
-    raise SystemExit('請先停妥、關閉點火並保持 C4 供電，再設定 HUD。')
+  try:
+    set_enabled(args.enable, params)
+  except (ValueError, OSError) as error:
+    raise SystemExit(str(error)) from error
   if args.enable:
-    ENABLE.touch(mode=0o600)
-    print('已啟用測試 HUD。Mac 須先完成 hkg adapter 安裝；停車狀態重啟 C4 後生效。')
+    print('已啟用測試 HUD，無須重啟。Mac 須完成 hkg adapter 安裝並連上 Jetlink。')
   else:
-    ENABLE.unlink(missing_ok=True)
-    print('已關閉 HUD；停車狀態重啟 C4 可完全退出新增的顯示程序。')
+    print('已關閉 HUD 資料傳送，無須重啟。')
 
 
 if __name__ == '__main__':

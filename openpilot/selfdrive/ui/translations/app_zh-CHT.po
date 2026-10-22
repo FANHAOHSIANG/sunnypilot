@@ -1850,3 +1850,36 @@ msgstr "沒有警示"
 
 msgid "pair with comma connect"
 msgstr "連接 comma connect"
+
+msgid "external HUD"
+msgstr "外接 HUD"
+
+msgid "no restart needed"
+msgstr "無須重啟"
+
+msgid "Send driving information to an external HUD through Jetlink on Mac."
+msgstr "透過 Mac 的 Jetlink 將行車資訊傳送到外接 HUD。"
+
+msgid "Install the Mac HUD adapter first and enable Jetlink."
+msgstr "請先安裝 Mac HUD 適配程式，並開啟 Jetlink。"
+
+msgid "Change only while parked with the vehicle off. No restart needed."
+msgstr "僅限停車熄火時切換，無須重啟。"
+
+msgid "HUD setting unchanged"
+msgstr "HUD 設定未變更"
+
+msgid "Park and turn the vehicle off before changing HUD settings."
+msgstr "請先停妥並熄火，再切換 HUD 設定。"
+
+msgid "HUD setting not saved"
+msgstr "HUD 設定未儲存"
+
+msgid "Check storage permissions and try again."
+msgstr "請檢查儲存空間與寫入權限後重試。"
+
+msgid "HUD setting saved"
+msgstr "HUD 設定已儲存"
+
+msgid "No restart needed. Connect Jetlink on Mac with the HUD adapter installed."
+msgstr "無須重啟。請連接 Mac Jetlink，並確認已安裝 HUD 適配程式。"

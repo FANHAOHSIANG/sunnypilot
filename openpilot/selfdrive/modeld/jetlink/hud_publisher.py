@@ -99,14 +99,23 @@ def main():
   # Decoding/serialization runs in a separate low-priority process.
   os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
   os.nice(10)
-  from openpilot.cereal import messaging
-  from openpilot.common.params import Params
   from pathlib import Path
-  sm, params = messaging.SubMaster(list(SERVICES)), Params()
+  sm = params = None
   status = Path('/dev/shm/sunnypilot-jetlink-model.json')
   tmp = PACKET.with_suffix('.tmp')
   try:
-    while ENABLE.is_file():
+    while True:
+      if not ENABLE.is_file():
+        # Stay available for live enable, but unsubscribe and do no serialization.
+        sm = params = None
+        tmp.unlink(missing_ok=True)
+        PACKET.unlink(missing_ok=True)
+        time.sleep(PERIOD)
+        continue
+      if sm is None:
+        from openpilot.cereal import messaging
+        from openpilot.common.params import Params
+        sm, params = messaging.SubMaster(list(SERVICES)), Params()
       start = time.monotonic()
       sm.update(0)
       active = False

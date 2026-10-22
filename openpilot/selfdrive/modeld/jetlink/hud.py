@@ -23,8 +23,26 @@ CAPABILITY = 'carrot_hud_v1'
 MESSAGE = 0x4000
 
 
+def can_configure(params):
+  return not params.get_bool('IsOnroad') and params.get_bool('IsOffroad')
+
+
+def set_enabled(enabled, params):
+  """Shared by the parked-only CLI and display toggle; observed live by HUD workers."""
+  if not can_configure(params):
+    raise ValueError('請先停妥、關閉點火並保持 C4 供電，再設定 HUD。')
+  if enabled:
+    ENABLE.touch(mode=0o600)
+  else:
+    ENABLE.unlink(missing_ok=True)
+
+
+def capable(peer):
+  return isinstance(peer, dict) and peer.get(CAPABILITY) is True
+
+
 def supported(peer):
-  return isinstance(peer, dict) and peer.get(CAPABILITY) is True and ENABLE.is_file()
+  return capable(peer) and ENABLE.is_file()
 
 
 def read_packet(path=PACKET, now=None):
@@ -52,7 +70,8 @@ class HudSender:
     self.thread = None
     self.path = path
     self.sent = self.skipped = 0
-    if supported(peer):
+    # Keep a lightweight watcher even when disabled so enabling needs no USB reset.
+    if capable(peer):
       self.thread = threading.Thread(target=self._read, name='jetlink-hud-read', daemon=True)
       try:
         self.thread.start()
@@ -113,7 +132,7 @@ class HudSession:
     self.process = self.sender = None
 
   def __enter__(self):
-    if supported(self.peer):
+    if capable(self.peer):
       try:
         PACKET.unlink(missing_ok=True)
         self.process = subprocess.Popen(

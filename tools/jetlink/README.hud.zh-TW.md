@@ -13,7 +13,8 @@
 - 沿用 Carrot renderer 與 Mac H.264 / TURZX 顯示輸出；hkg 資料轉成有上限的 JSON，
   不把不同 fork 的 cereal 二進位資料互相解碼。
 - 使用已存在的 `carrot_hud_v1` / `0x4000`。Mac App 必須包含 Carrot HUD receiver。
-- 預設關閉。啟用且 Mac 宣告能力才啟動獨立、低優先序 publisher。
+- 預設關閉。Mac 宣告 HUD 能力後啟動低優先序待命程序；開關即時控制資料傳送。
+  關閉時不訂閱／編碼車況，清除暫存資料；再次開啟會重新訂閱，不需重設 USB 或重啟 C4。
 - 最多 5 Hz、每個 JSON 最多 14 KiB，保留最新一包。實際 FunctionFS 傳輸還有 framing/alignment。
 - 閒置時由 jetlinkd 傳送；USB lease 交給 modeld 後，由 DirectClient 在模型回覆完成、
   沒有 pending inference、且當幀至少剩 3 ms 時嘗試送 HUD。資料序號使用原 client。
@@ -21,7 +22,7 @@
 - 停用或資料過期不重播舊資料。Mac 接收封包超過 0.5 秒失效；各車況來源也個別檢查時效。
   可用來源改變會清除 renderer parser 的路徑／前車／啟用狀態快取。
 
-相機、導航指示、地圖、高德投影、iOS HUD、C4 設定頁未包含在第一版。
+相機、導航指示、地圖、高德投影、iOS HUD 未包含在第一版。
 資料來源失效時顯示等待／HUD data unavailable；這不是取代 C4 原本的駕駛警示。
 沒有修改 CAN、Panda、轉向、縱向、模型契約、大小模型交接條件。
 USB 額外負載仍需實測，不能把離線測試視為即時性保證。
@@ -36,14 +37,17 @@ USB 額外負載仍需實測，不能把離線測試視為即時性保證。
 2. 在 C4 停妥、熄火且保持供電時檢查 `git status --short`。
    若有修改先保存並確認用途；不要強制 reset、checkout 或覆蓋。
    取得本測試分支並切換後，先讓正常編譯完成，再檢查 Jetlink 關閉 HUD 時仍正常。
-3. 在本測試分支、offroad 執行：
+3. C4 開啟「設定 → 功能開關（toggles）→ 外接 HUD（external HUD）」，
+   位於 Jetlink 開關後面。僅在 offroad 可修改，無須重啟；資料更新以 5 Hz 週期生效。
+   開關沿用 `/data/jetlink-hud.enabled`，先前用指令啟用的設定會保留。
+   也可在本測試分支、offroad 使用原有指令：
 
 ```sh
 cd /data/openpilot
 python tools/jetlink/hud_config.py --enable
 ```
 
-4. 停車重啟 C4，啟動原有 HUD-enabled Jetlink App。依原有流程確認大模型 Active，
+4. 啟動原有 HUD-enabled Jetlink App。依原有流程確認大模型 Active，
    並確認 Mac 上 `hkg_hud.py` 啟動。`--status` 只能確認設定與 publisher 檔案存在，
    不能證明螢幕已顯示或大模型正在被採用。
 
@@ -57,7 +61,10 @@ python tools/jetlink/hud_config.py --enable
 
 ## 還原
 
-停車 offroad 執行 `python tools/jetlink/hud_config.py --disable`，再重啟。
+停車 offroad 執行 `python tools/jetlink/hud_config.py --disable`，無須重啟。
+也可直接關閉 C4 設定頁的「外接 HUD」。這控制資料傳送，不是螢幕電源；
+Mac 既有畫面會在資料過期後進入無資料狀態。重新開啟後，連線正常即可恢復。
+首次安裝這版程式仍需重啟一次，讓正在執行的 UI／Jetlink 載入新程式。
 需要完全還原時切回原 `hkg-enhanced-jetlink`（先確認工作目錄無未保存修改）。
 Mac 退出 App 後在伴隨分支執行 `python3 scripts/enable_hkg.py --rollback`。
 HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原狀。
@@ -66,8 +73,10 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-合併 `d87715b5f` 後，C4 端 46 項測試通過（test_direct、test_pipeline、test_hud），
+加入免重啟開關後，C4 端 54 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
+另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
+以及 UI／指令共用設定、行駛中鎖定與寫入失敗處理；UI 測試以替身取代繪圖元件。
 先前 Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）；本次未修改 Mac 端。
 另以 pinned Carrot parser 驗證合成的 20 m/s 車速 → 72 km/h、設定 90 km/h、
 17 點路徑與前車、latActive=true。這是合成資料測試，不是實車紀錄或完整畫面測試。
@@ -75,6 +84,7 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 ```sh
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud.py' -v
+PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud_toggle.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_direct.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_pipeline.py' -v
 ```
