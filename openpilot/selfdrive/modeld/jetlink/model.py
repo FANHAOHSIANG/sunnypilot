@@ -251,8 +251,13 @@ class JoiningModel:
                                 {k: sm.valid[k] and sm.alive[k] for k in required}, sm.recv_time)
     if self.join_allowed and self.small_runs >= 3 and not self.recovery.proving:
       FAULT.unlink(missing_ok=True)
-    self.ready = state().get('state') == 'ready'
-    if self.connection is not None and not (self.ready and self.join_allowed):
+    link_state = state().get('state')
+    self.ready = link_state == 'ready'
+    # The owner's readiness advertisement can lapse/change while it closes
+    # its idle transport and lends USB. Let the bounded handshake finish:
+    # canceling here would open, then immediately retire, each new session.
+    # Controls and terminal owner failures still cancel an in-flight join.
+    if self.connection is not None and (not self.join_allowed or link_state in ('blocked', 'unsupported')):
       self.connection.close()
       self.connection = None
     if now >= self.next_status:
@@ -289,7 +294,8 @@ class JoiningModel:
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     from openpilot.common.swaglog import cloudlog
     frame_smoothing = self.lat_smooth_seconds
-    if self.warp is not None and self.small_runs >= 3 and self.client is None and self.ready and self.join_allowed and time.monotonic() >= self.next_join:
+    if (self.warp is not None and self.small_runs >= 3 and self.client is None and
+        (self.ready or self.connection is not None) and self.join_allowed and time.monotonic() >= self.next_join):
       try:
         if self.connection is None:
           self.connection = ClientConnection()
@@ -309,6 +315,7 @@ class JoiningModel:
           self.fallback_until = 0.
           self._write_proving()
       except Exception as exc:
+        cloudlog.exception('Jetlink connection failed before model admission')
         if self.client is not None:
           self.client.close()
           self.client = None

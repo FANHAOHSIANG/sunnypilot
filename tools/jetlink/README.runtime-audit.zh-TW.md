@@ -1,5 +1,20 @@
 # Mac 上路故障：與 zoompilot 的來源比對
 
+## 2026-10-22 進行中的 USB 握手不依 ready 廣告取消
+
+0e265501d 的裝置紀錄確認：第 12/20 幀 proving 延遲後同幀小模型接手；
+之後 owner 可恢復 ready/leased，但 Mac 多次直連在握手後立即結束。
+檢查發現 JoiningModel.update 只要 owner 廣告短暫不是 ready，就取消進行中
+的 ClientConnection；被取消的 future 在握手完成時會立刻關閉新客戶端。
+這條路徑既不採用連線，也不記錄連線失敗／退避，可能形成反覆交接。
+
+參照 zoompilot/jetlink b1d7041 的 openpilot/joining.py _join_loop，讓已有
+的有期限背景握手自行完成或報錯，不以 owner 的暫態 ready 廣告當成取消訊號。
+新握手仍須 ready；巡航/MADS 等切入條件不成立或 owner blocked/unsupported
+仍取消。已完成的失敗 future 即使沒有 ready 廣告也會被處理、記錄並退避。
+這不是完整 Owner/Loan 移植，也不能從 Mac 中止紀錄單獨證明每次斷線的原因。
+proving 延遲門檻不變，實機連續運作仍待確認。
+
 ## 2026-10-22 車況新鮮度取樣順序
 
 使用者六秒取樣確認 deviceState 12 筆、pandaStates 60 筆及四項行車控制

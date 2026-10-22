@@ -3,7 +3,7 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 
@@ -185,6 +185,62 @@ class AsyncTests(unittest.TestCase):
 
 class ModelRecoveryTests(unittest.TestCase):
   setUp = test_port.ModelTransitionTests.setUp
+
+  def pending_connection(self):
+    a = self.adapter
+    a.warp = Mock()
+    a.small_runs = 3
+    a.connection = SimpleNamespace(future=Future(), close=Mock())
+    sm = MagicMock(valid=dict.fromkeys(('carState', 'selfdriveState', 'carControl', 'carControlSP'), True),
+              alive=dict.fromkeys(('carState', 'selfdriveState', 'carControl', 'carControlSP'), True))
+    return a, a.connection, sm
+
+  def test_transient_owner_readiness_does_not_cancel_inflight_handshake(self):
+    a, connection, sm = self.pending_connection()
+    with patch.object(model, 'may_join', return_value=True), \
+         patch.object(model, 'state', side_effect=[{'state': 'connecting'}, {'state': 'unavailable'}, {'state': 'ready'}]):
+      for _ in range(3):
+        a.update(sm, None)
+        self.assertIs(a.connection, connection)
+    connection.close.assert_not_called()
+
+  def test_controls_or_terminal_link_state_still_cancel_pending_handshake(self):
+    for allowed, status in ((False, 'ready'), (True, 'blocked'), (True, 'unsupported')):
+      with self.subTest(allowed=allowed, status=status):
+        a, connection, sm = self.pending_connection()
+        with patch.object(model, 'may_join', return_value=allowed), \
+             patch.object(model, 'state', return_value={'state': status}):
+          a.update(sm, None)
+        connection.close.assert_called_once()
+        self.assertIsNone(a.connection)
+
+  def test_failed_pending_handshake_is_reaped_even_without_ready_advertisement(self):
+    a, connection, sm = self.pending_connection()
+    connection.future.set_exception(TimeoutError('handshake expired'))
+    with patch.object(model, 'may_join', return_value=True), \
+         patch.object(model, 'state', return_value={'state': 'connecting'}):
+      a.update(sm, None)
+    self.assertEqual(a.run({}, {}, self.inputs), {'local': True})
+    self.assertIsNone(a.connection)
+    self.assertEqual(a.error, 'handshake expired')
+    self.assertEqual(a.recovery.failures, 1)
+
+  def test_completed_handshake_is_adopted_during_transient_ready_gap(self):
+    a, connection, sm = self.pending_connection()
+    client = SimpleNamespace(spec=test_port.DEFAULT_SPEC, close=Mock(),
+                             infer=Mock(return_value=np.zeros(test_port.DEFAULT_SPEC.output_nelem, np.float32)))
+    connection.future.set_result(client)
+    with patch.object(model, 'may_join', return_value=True), \
+         patch.object(model, 'state', return_value={'state': 'connecting'}), \
+         patch.object(model, 'parse_outputs', return_value={'remote': True}), \
+         patch.object(model, 'ClientConnection') as reconnect:
+      a.update(sm, None)
+      self.assertEqual(a.run({}, {}, self.inputs), {'remote': True})
+    self.assertIs(a.client, client)
+    self.assertTrue(a.recovery.proving)
+    connection.close.assert_not_called()
+    client.close.assert_not_called()
+    reconnect.assert_not_called()
 
   def test_direct_pipeline_publishes_health_after_send_and_uses_late_reply_for_hold(self):
     a = self.adapter
