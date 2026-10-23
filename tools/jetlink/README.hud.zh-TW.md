@@ -1,5 +1,41 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
+## 相鄰車道雷達目標轉接（2026-10-24）
+
+已接入 HKG 現有 `radarTracks.points`，Mac 僅在 HUD 程序內改名為 Carrot 的
+`liveTracks.points`，由原版雷達篩選與場景程式處理。這不是完整側後方角雷達移植。
+
+- 只轉送有有限數值 dRel/yRel/vRel/trackId 的前方目標；最多 32 個，依距離排序。
+- HKG SCC-only 來源的 yRel=NaN 不會被當成置中的車，也不以盲點旗標虛構距離或車速。
+- 雷達錯誤、來源過期、空目標或來源消失時清除額外目標；沿用 0.5 秒有效期。
+- 保留 5 Hz／14 KiB 上限；超限優先捨棄額外 tracks，避免擠掉車道、路徑與主要前車。
+- 場景測試：左側 20 m、64.8 km/h；右側 25 m、75.6 km/h，左右座標正確；
+  T101/T102 為一般目標，L1 仍為主要前車，不改既有字體優先級。
+- 不修改雷達 ECU 設定、CAN 收發、Panda Safety、模型或車輛控制。
+
+63 項 Jetlink 與 25 項 Mac 測試通過。包含實際 publisher→JSON→Mac reader→
+pinned Carrot parser→build_cluster_scene 的測試；未作實車／USB 驗證。
+
+HKG 目前的 Hyundai RadarInterfaceExt 在 SCC 路徑僅取得一個 ACC 前車，橫向位置為 NaN。
+carState 只有左右盲點 Bool，沒有 Carrot 的 leftLongDist/rightLongDist 等距離欄位。
+因此，只有實車 `radarTracks` 已含左右目標時，這次轉接才會讓 HUD 出現那些目標。
+原始角雷達與 ADRV/CCNC 物件解碼尚未接入；下一步需確認車上實際報文與內容。
+
+C4 更新 HUD 分支後，可在車輛停妥且 CAN 正常工作時執行：
+
+```sh
+cd /data/openpilot
+python tools/jetlink/hud_radar_check.py
+```
+
+此診斷只訂閱 radarTracks/carState/can，五秒後結束；顯示目標數、可用橫向位置、
+錯誤旗標及 pinned Carrot 解碼器所用候選報文的 bus/長度/次數，不傳送 CAN。
+觀察到位址不代表已驗證物件格式，短時間沒收到也不能判定硬體不支援。
+
+Mac 需更新 HKG helper（最新版套件的 06-HKG-HUD.command），既有 Jetlink.app 保留，
+不重建 App、不重新下載模型。新舊兩端可分開更新：舊 Mac 會忽略新 radarTracks 欄位，
+新版 Mac 仍接受舊七來源封包。
+
 ## 車道、車速與前車對接複查（2026-10-24）
 
 發現並修正兩個前車資料缺口：

@@ -12,7 +12,7 @@ import time
 from openpilot.selfdrive.modeld.jetlink.hud import ENABLE, PACKET, HEADER, MAX_BYTES, PERIOD
 
 SOURCE = 'hkg_hud_v1'
-SERVICES = ('carState', 'controlsState', 'selfdriveState', 'carControl', 'modelV2', 'radarState', 'deviceState')
+SERVICES = ('carState', 'controlsState', 'selfdriveState', 'carControl', 'modelV2', 'radarState', 'deviceState', 'radarTracks')
 LINE = {'x': 17, 'y': 17, 'z': 17, 't': 17}
 # Only the first prediction sample is consumed by Carrot's visual lead parser.
 MODEL_LEAD = {**{k: 1 for k in ('x', 'y', 'v', 'a', 'xStd', 'yStd')}, 'prob': None, 'probTime': None}
@@ -32,6 +32,7 @@ FIELDS = {
     'frameId': None, 'frameDropPerc': None, 'modelExecutionTime': None},
   'radarState': {'leadOne': LEAD, 'leadTwo': LEAD},
   'deviceState': {'started': None, 'deviceType': None},
+  'radarTracks': {},  # sanitized separately; unknown lateral position is not zero
 }
 
 
@@ -62,14 +63,34 @@ def select(value, spec):
   return str(value)[:200]
 
 
+def radar_tracks(value):
+  errors = get(value, 'errors')
+  if any(get(errors, key, False) for key in ('canError', 'radarFault', 'wrongConfig', 'radarUnavailableTemporary')):
+    return None
+  points = []
+  for point in get(value, 'points', ()):
+    fields = {key: get(point, key) for key in ('trackId', 'dRel', 'yRel', 'vRel')}
+    # HKG SCC-only tracks have yRel=NaN. They cannot locate adjacent vehicles;
+    # preserve leadOne/leadTwo separately instead of inventing a center position.
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in fields.values()):
+      continue
+    if not 0.2 < fields['dRel'] <= 180. or abs(fields['yRel']) > 12.:
+      continue
+    points.append(select(fields, dict.fromkeys(fields)))
+  points.sort(key=lambda p: (p['dRel'], p['trackId']))
+  return {'points': points[:32]}
+
+
 def snapshot(sm, now, onroad, metric, active=False):
   data, age = {}, {}
   for name in SERVICES:
     elapsed = now - sm.recv_time[name]
     limit = 1.5 if name == 'deviceState' else .5
     if sm.valid[name] and sm.alive[name] and 0 <= elapsed < limit:
-      data[name] = select(sm[name], FIELDS[name])
-      age[name] = elapsed
+      item = radar_tracks(sm[name]) if name == 'radarTracks' else select(sm[name], FIELDS[name])
+      if item is not None:
+        data[name] = item
+        age[name] = elapsed
   # HKG's current RadarState uses present; the pinned Carrot parser uses status.
   # An explicit false present must win over any legacy status value.
   if 'radarState' in data:
@@ -97,6 +118,10 @@ def snapshot(sm, now, onroad, metric, active=False):
 
 def encode(record):
   data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
+  if len(data) > MAX_BYTES and 'radarTracks' in record['hkg']:
+    # Extra targets must not crowd out the lanes/path or the primary lead.
+    record = dict(record, hkg={k: v for k, v in record['hkg'].items() if k != 'radarTracks'})
+    data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
   if len(data) > MAX_BYTES:
     # Drop the optional geometry as one unit; never truncate a framed message.
     record = dict(record, hkg={k: v for k, v in record['hkg'].items() if k != 'modelV2'})

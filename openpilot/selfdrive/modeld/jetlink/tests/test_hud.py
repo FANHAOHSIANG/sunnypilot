@@ -23,6 +23,7 @@ class Sources:
       'modelV2': dict(position=line, laneLines=[line] * 4, laneLineProbs=[.1, .9, .9, .1], roadEdges=[line] * 2),
       'radarState': dict(leadOne=dict(present=True, dRel=30., yRel=1.5, vRel=-2.)),
       'deviceState': dict(started=True),
+      'radarTracks': dict(points=[]),
     }
 
   def __getitem__(self, name):
@@ -30,6 +31,33 @@ class Sources:
 
 
 class SnapshotTests(unittest.TestCase):
+  def test_extra_tracks_require_real_lateral_position_and_no_radar_error(self):
+    sm = Sources()
+    points = [dict(trackId=1, dRel=20., yRel=3.5, vRel=-2.),
+              dict(trackId=2, dRel=25., yRel=-3.5, vRel=1.),
+              dict(trackId=3, dRel=15., yRel=float('nan'), vRel=0.),
+              dict(trackId=4, dRel=10., vRel=0.),
+              dict(trackId=5, dRel=0., yRel=3., vRel=0.)]
+    sm.values['radarTracks'] = dict(points=points)
+    data = snapshot(sm, 10.05, True, True)['hkg']['radarTracks']
+    self.assertEqual([p['trackId'] for p in data['points']], [1, 2])
+    for flag in ('canError', 'radarFault', 'wrongConfig', 'radarUnavailableTemporary'):
+      sm.values['radarTracks']['errors'] = {flag: True}
+      self.assertNotIn('radarTracks', snapshot(sm, 10.05, True, True)['hkg'])
+
+  def test_extra_tracks_are_bounded_and_cannot_displace_geometry(self):
+    sm = Sources()
+    sm.values['radarTracks'] = dict(points=[dict(trackId=i, dRel=float(i + 1), yRel=3.5, vRel=1.) for i in range(100)])
+    record = snapshot(sm, 10.05, True, True)
+    self.assertEqual(len(record['hkg']['radarTracks']['points']), 32)
+    self.assertLessEqual(len(encode(record)), hud.MAX_BYTES)
+    base = dict(record, hkg={k: v for k, v in record['hkg'].items() if k != 'radarTracks'})
+    # Base geometry fits; only the optional extra tracks cause overflow.
+    record['padding'] = 'x' * (hud.MAX_BYTES - len(encode(base)) - 40)
+    decoded = json.loads(encode(record))
+    self.assertIn('modelV2', decoded['hkg'])
+    self.assertNotIn('radarTracks', decoded['hkg'])
+
   def test_current_present_and_legacy_status_are_normalized(self):
     for flags, expected in (({'present': True}, True), ({'present': False}, False),
                             ({'present': False, 'status': True}, False),
