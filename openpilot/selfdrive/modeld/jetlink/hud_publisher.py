@@ -124,7 +124,7 @@ def main():
         active = state.get('active') is True and 0 <= start - float(state['updated']) < 1
       except (OSError, ValueError, KeyError, TypeError):
         pass
-      record = snapshot(sm, start, params.get_bool('IsOnroad'), params.get_bool('IsMetric'), active)
+      record = snapshot(sm, start, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
       tmp.write_bytes(HEADER.pack(start) + encode(record))
       os.replace(tmp, PACKET)
       time.sleep(max(0., PERIOD - (time.monotonic() - start)))

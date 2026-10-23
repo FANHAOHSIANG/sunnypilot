@@ -1,5 +1,8 @@
 """Live HUD lifecycle and settings, without USB or a graphics context."""
 from pathlib import Path
+import base64
+import json
+import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -15,8 +18,13 @@ class HudToggleTests(unittest.TestCase):
     self.addCleanup(directory.cleanup)
     self.marker = Path(directory.name) / 'enabled'
     self.packet = Path(directory.name) / 'snapshot.packet'
-    self.flags = {'IsOnroad': False, 'IsOffroad': True}
-    self.params = SimpleNamespace(get_bool=lambda key: self.flags.get(key, False))
+    self.flags = {'IsOffroad': True}
+    keys = set(re.findall(r'\{"([^"]+)"', (Path(__file__).resolve().parents[4] / 'common/params_keys.h').read_text()))
+    def get_bool(key):
+      if key not in keys:
+        raise KeyError(key)
+      return self.flags.get(key, False)
+    self.params = SimpleNamespace(get_bool=get_bool)
     for module in (hud, hud_publisher):
       for name, value in (('ENABLE', self.marker), ('PACKET', self.packet)):
         patcher = patch.object(module, name, value)
@@ -33,14 +41,22 @@ class HudToggleTests(unittest.TestCase):
     self.assertFalse(self.marker.exists())
 
   def test_unknown_or_onroad_state_rejects_both_changes(self):
-    for onroad, offroad in ((True, True), (True, False), (False, False)):
-      self.flags.update(IsOnroad=onroad, IsOffroad=offroad)
+    for flags in ({'IsOffroad': False}, {}):
+      self.flags.clear()
+      self.flags.update(flags)
       for enabled in (True, False):
-        with self.subTest(onroad=onroad, offroad=offroad, enabled=enabled):
+        with self.subTest(flags=flags, enabled=enabled):
           self.marker.touch()
           with self.assertRaises(ValueError):
             hud.set_enabled(enabled, self.params)
           self.assertTrue(self.marker.exists())
+
+  def test_params_backend_failure_is_a_handled_setting_error(self):
+    params = SimpleNamespace(get_bool=Mock(side_effect=RuntimeError('backend failure')))
+    for enabled in (True, False):
+      with self.assertRaisesRegex(ValueError, 'offroad state'):
+        hud.set_enabled(enabled, params)
+    self.assertFalse(self.marker.exists())
 
   def test_sender_observes_off_on_off_on_without_recreation(self):
     sender = hud.HudSender({}, path=self.packet)
@@ -84,6 +100,7 @@ class HudToggleTests(unittest.TestCase):
   def test_publisher_unsubscribes_off_and_recreates_fresh_sources_on(self):
     builds = []
     steps = []
+    onroad_values = []
 
     def make_sources(services):
       sm = SimpleNamespace(valid=dict.fromkeys(services, False), alive=dict.fromkeys(services, False),
@@ -93,8 +110,12 @@ class HudToggleTests(unittest.TestCase):
 
     def advance(_):
       steps.append(self.packet.exists())
+      if self.packet.exists():
+        record = json.loads(self.packet.read_bytes()[hud.HEADER.size:])
+        onroad_values.append(base64.b64decode(record['params']['IsOnroad']))
       if len(steps) in (1, 3):
         self.marker.touch()
+        self.flags['IsOffroad'] = len(steps) == 1
       elif len(steps) == 2:
         self.marker.unlink()
       else:
@@ -107,6 +128,7 @@ class HudToggleTests(unittest.TestCase):
       with self.assertRaises(KeyboardInterrupt):
         hud_publisher.main()
     self.assertEqual(steps, [False, True, False, True])
+    self.assertEqual(onroad_values, [b'0', b'1'])
     self.assertEqual(len(builds), 2)
     for sm in builds:
       sm.update.assert_called_once_with(0)

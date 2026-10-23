@@ -1,13 +1,16 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
-## 畫面開關再次撤下（2026-10-23）
+## 修正點擊崩潰並恢復 HUD 開關（2026-10-23）
 
-使用者回報原生開關版 `76aecb7f4` 點擊 HUD 後再次出現重啟現象。
-尚無故障當下的日誌，未確認是 UI 退出或整機重啟，也未確認是點擊回呼或啟用後資料通道造成。
-本次將設定頁還原為使用者確認正常的 `132b618a6` 版本；移除針對撤下按鈕的 UI 測試。
-這是停止暴露有問題按鈕的措施，不是根因修復。既有 HUD 啟用標記不會由程式更新自動清除；
-若剛才已啟用，停車 offroad 時先執行下方 `--disable` 指令。
-在取得故障日誌之前，不要求再次按鈕重現或重新啟用 HUD。
+實機 swaglog.0000001022 與 1026 均記錄 UI 點擊回呼在讀取 `IsOnroad` 時
+拋出 `openpilot.common.params.UnknownKeyName: b'IsOnroad'`。這證明該次點擊造成 UI 崩潰，
+不能單憑此紀錄推論整機是否也重啟。錯誤發生於啟用標記寫入之前。
+此分支沒有註冊 `IsOnroad`；manager 實際維護的是 `IsOffroad = not started`。
+本版改以 `IsOffroad` 判斷是否允許操作，缺值時禁止；Params 讀取異常轉為可處理的設定錯誤。
+背景 publisher 同樣改讀 `IsOffroad`，避免成功開啟後再因相同錯誤退出。
+給 Mac 的封包仍保留 Carrot 格式的 `IsOnroad` 欄位，它不是 C4 Params 查詢。
+恢復 Jetlink 旁的原生 `HUD` 按鈕，UI 另以 `ui_state.started` 阻擋行車中點擊。
+本次有明確錯誤堆疊與回歸測試，但修正版仍待 C4 實機確認；早期僅滑動的回報不由此堆疊直接證明。
 
 基底：`FANHAOHSIANG/sunnypilot` 的 `hkg-enhanced-jetlink`
 `b2d7f2893ce76231a8de7014379c676ecf8b542e`。獨立分支：`hkg-enhanced-jetlink-hud`。
@@ -46,14 +49,15 @@ USB 額外負載仍需實測，不能把離線測試視為即時性保證。
 2. 在 C4 停妥、熄火且保持供電時檢查 `git status --short`。
    若有修改先保存並確認用途；不要強制 reset、checkout 或覆蓋。
    取得本測試分支並切換後，先讓正常編譯完成，再檢查 Jetlink 關閉 HUD 時仍正常。
-3. 畫面開關已撤下。停車 offroad 使用指令停用目前的 HUD：
+3. 更新程式後重啟一次，進入「設定 → 功能開關」，在 Jetlink 旁找到 `HUD`。
+   停車 offroad 可點擊切換，之後開關即時生效，不需重啟。也可使用指令：
 
 ```sh
 cd /data/openpilot
-python tools/jetlink/hud_config.py --disable
+python tools/jetlink/hud_config.py --enable
 ```
 
-指令介面保留 `--enable` / `--disable` / `--status`；啟用故障尚未排除，不應將介面可用視為實機穩定性驗證。
+指令介面提供 `--enable` / `--disable` / `--status`，與 UI 使用同一個啟用標記。
 
 4. 啟動原有 HUD-enabled Jetlink App。依原有流程確認大模型 Active，
    並確認 Mac 上 `hkg_hud.py` 啟動。`--status` 只能確認設定與 publisher 檔案存在，
@@ -81,12 +85,16 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-本版 C4 端 52 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle），
+本版 C4 端 55 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle、test_hud_params），
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
 另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
 以及指令共用設定與行駛中鎖定。
-先前原生開關版有 5 項 UI 測試通過，但圖形、字型、Params 與車況 IPC 使用替身，
-未能涵蓋使用者再次遇到的實機故障；不能作為開關可部署的證明。本次已撤下該 UI 與其專用測試。
+參數相容性測試使用實際 Python Params 的 check_key/get_bool 與本分支 params_keys.h，
+僅替換 native backend；重現舊 `IsOnroad` 的 UnknownKeyName，驗證修正後 UI 共用 setter 與 CLI 可開關。
+publisher 生命週期測試檢查真實註冊鍵，並驗證停車／行車的封包旗標。
+另有 6 項 UI 測試使用實際原生元件、標籤、捲動與點擊流程，包含參數讀取失敗時不退出 UI。
+UI 測試的參數替身依本分支註冊表拒絕未知鍵；先前允許任意鍵的替身漏掉了這次實機錯誤。
+圖形呼叫、字型／資產與車況 IPC 仍使用替身，沒有執行 C4 GPU／觸控實機驗證。
 先前 Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）；本次未修改 Mac 端。
 另以 pinned Carrot parser 驗證合成的 20 m/s 車速 → 72 km/h、設定 90 km/h、
 17 點路徑與前車、latActive=true。這是合成資料測試，不是實車紀錄或完整畫面測試。
@@ -95,8 +103,10 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 ```sh
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud_toggle.py' -v
+PYTHONPATH=.:third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud_params.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_direct.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_pipeline.py' -v
+PYTHONPATH=.:third_party/jetlink python -m unittest discover -s tools/jetlink/tests -p 'test_hud_ui.py' -v
 ```
 
 本版參考 Carrot `7e371b92` 的 HUD publisher/receiver 分層與 `carrotMAC-HUD`

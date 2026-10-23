@@ -24,7 +24,14 @@ MESSAGE = 0x4000
 
 
 def can_configure(params):
-  return not params.get_bool('IsOnroad') and params.get_bool('IsOffroad')
+  # hkg registers IsOffroad only; manager writes it as the inverse of started.
+  # A missing value is False, so startup/unknown state cannot enable changes.
+  try:
+    return params.get_bool('IsOffroad')
+  except Exception as error:
+    # Params also raises UnknownKeyName/RuntimeError, not just OSError.
+    # Keep a settings/backend failure inside the UI/CLI error boundary.
+    raise ValueError('Unable to read HUD offroad state') from error
 
 
 def set_enabled(enabled, params):
