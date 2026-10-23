@@ -118,14 +118,17 @@ def main():
         sm, params = messaging.SubMaster(list(SERVICES)), Params()
       start = time.monotonic()
       sm.update(0)
+      # SubMaster timestamps received messages during update(). A timestamp
+      # from before update makes every newly received service look future-dated.
+      now = time.monotonic()
       active = False
       try:
         state = json.loads(status.read_text())
-        active = state.get('active') is True and 0 <= start - float(state['updated']) < 1
+        active = state.get('active') is True and 0 <= now - float(state['updated']) < 1
       except (OSError, ValueError, KeyError, TypeError):
         pass
-      record = snapshot(sm, start, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
-      tmp.write_bytes(HEADER.pack(start) + encode(record))
+      record = snapshot(sm, now, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
+      tmp.write_bytes(HEADER.pack(now) + encode(record))
       os.replace(tmp, PACKET)
       time.sleep(max(0., PERIOD - (time.monotonic() - start)))
   finally:

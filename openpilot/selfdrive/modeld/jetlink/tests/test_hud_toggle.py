@@ -135,6 +135,54 @@ class HudToggleTests(unittest.TestCase):
     self.assertFalse(self.packet.exists())
     self.assertFalse(self.packet.with_suffix('.tmp').exists())
 
+  def test_publisher_keeps_messages_received_after_loop_start(self):
+    # SubMaster.update() stamps recv_time with monotonic() after polling.
+    # High-frequency services get a new timestamp on every publisher tick.
+    clock = [10.]
+    packets = []
+
+    class Sources:
+      def __init__(self, services):
+        self.valid = dict.fromkeys(services, True)
+        self.alive = dict.fromkeys(services, True)
+        self.recv_time = dict.fromkeys(services, 0.)
+        self.data = {'carState': {'vEgo': 20.}, 'modelV2': {'frameId': 1},
+                     'deviceState': {'started': True}}
+        self.recv_time['deviceState'] = 9.9
+
+      def update(self, timeout):
+        clock[0] += .002
+        for name in ('carState', 'modelV2'):
+          self.recv_time[name] = clock[0]
+
+      def __getitem__(self, name):
+        return self.data[name]
+
+    def advance(delay):
+      raw = self.packet.read_bytes()
+      record = json.loads(raw[hud.HEADER.size:])
+      packets.append(record)
+      self.assertEqual(set(record['hkg']), {'carState', 'modelV2', 'deviceState'})
+      self.assertEqual(record['hkg']['carState']['vEgo'], 20.)
+      self.assertGreaterEqual(record['age']['carState'], 0.)
+      self.assertLess(record['age']['carState'], .01)
+      self.assertEqual(hud.HEADER.unpack(raw[:hud.HEADER.size])[0], record['sent'])
+      self.assertAlmostEqual(delay, hud.PERIOD - .002)
+      if len(packets) == 2:
+        raise KeyboardInterrupt
+      clock[0] += delay
+
+    self.marker.touch()
+    modules = {'openpilot.cereal': SimpleNamespace(messaging=SimpleNamespace(SubMaster=Sources)),
+               'openpilot.common.params': SimpleNamespace(Params=lambda: self.params)}
+    with patch.dict(sys.modules, modules), patch.object(hud_publisher.os, 'sched_setscheduler'), \
+         patch.object(hud_publisher.os, 'nice'), \
+         patch.object(hud_publisher.time, 'monotonic', side_effect=lambda: clock[0]), \
+         patch.object(hud_publisher.time, 'sleep', side_effect=advance):
+      with self.assertRaises(KeyboardInterrupt):
+        hud_publisher.main()
+    self.assertEqual(len(packets), 2)
+
 
 if __name__ == '__main__':
   unittest.main()
