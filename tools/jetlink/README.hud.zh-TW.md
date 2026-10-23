@@ -1,15 +1,13 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
-## 改用原生 C4 畫面開關（2026-10-23）
+## 畫面開關再次撤下（2026-10-23）
 
-實機回報在「功能開關」頁滑動、尚未按到 HUD 時，畫面回到逗號並卡住。
-目前沒有取得當下的錯誤堆疊，不能確定是 UI 退出或整機重啟，也未確定根因。
-使用者確認回退設定頁後不再發生。本版重新加入名稱為 `HUD` 的原生 `BigToggle`，
-與「公制單位」使用相同元件，位於 Jetlink 開關後方。
-移除先前的自訂 HUD 元件，不新增副標題、說明彈窗或翻譯；不在每幀繪圖時讀取 HUD 設定檔。
-停車時可操作，切換立即生效；設定讀寫失敗會顯示 `HUD: error` 並恢復實際儲存狀態。
-HUD 資料通道、指令開關及既有啟用狀態保留。更新程式需重啟一次，其後開關無須重啟。
-這是縮小 UI 差異的新實作，尚未驗證實機，也不是已確認根因的修復。
+使用者回報原生開關版 `76aecb7f4` 點擊 HUD 後再次出現重啟現象。
+尚無故障當下的日誌，未確認是 UI 退出或整機重啟，也未確認是點擊回呼或啟用後資料通道造成。
+本次將設定頁還原為使用者確認正常的 `132b618a6` 版本；移除針對撤下按鈕的 UI 測試。
+這是停止暴露有問題按鈕的措施，不是根因修復。既有 HUD 啟用標記不會由程式更新自動清除；
+若剛才已啟用，停車 offroad 時先執行下方 `--disable` 指令。
+在取得故障日誌之前，不要求再次按鈕重現或重新啟用 HUD。
 
 基底：`FANHAOHSIANG/sunnypilot` 的 `hkg-enhanced-jetlink`
 `b2d7f2893ce76231a8de7014379c676ecf8b542e`。獨立分支：`hkg-enhanced-jetlink-hud`。
@@ -48,13 +46,14 @@ USB 額外負載仍需實測，不能把離線測試視為即時性保證。
 2. 在 C4 停妥、熄火且保持供電時檢查 `git status --short`。
    若有修改先保存並確認用途；不要強制 reset、checkout 或覆蓋。
    取得本測試分支並切換後，先讓正常編譯完成，再檢查 Jetlink 關閉 HUD 時仍正常。
-3. 在 C4「設定 → 功能開關」找到 Jetlink 旁的 `HUD`，停車時點擊開啟。
-   開關無須重啟；也可在本測試分支、offroad 使用指令：
+3. 畫面開關已撤下。停車 offroad 使用指令停用目前的 HUD：
 
 ```sh
 cd /data/openpilot
-python tools/jetlink/hud_config.py --enable
+python tools/jetlink/hud_config.py --disable
 ```
+
+指令介面保留 `--enable` / `--disable` / `--status`；啟用故障尚未排除，不應將介面可用視為實機穩定性驗證。
 
 4. 啟動原有 HUD-enabled Jetlink App。依原有流程確認大模型 Active，
    並確認 Mac 上 `hkg_hud.py` 啟動。`--status` 只能確認設定與 publisher 檔案存在，
@@ -86,10 +85,8 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
 另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
 以及指令共用設定與行駛中鎖定。
-另有 5 項 UI 測試使用實際 Widget、BigToggle、UnifiedLabel、NavScroller 與觸控辨識流程，
-涵蓋滑動不誤觸、260 幀滑動繪圖不讀寫設定、點擊即時開關、重新開頁同步指令設定、
-行車鎖定、讀寫失敗及恢復。圖形呼叫、字型／資產、時鐘與車況 IPC 使用替身；
-這些測試沒有執行真實 GPU／字型渲染，也不能替代 C4 實體螢幕驗證。
+先前原生開關版有 5 項 UI 測試通過，但圖形、字型、Params 與車況 IPC 使用替身，
+未能涵蓋使用者再次遇到的實機故障；不能作為開關可部署的證明。本次已撤下該 UI 與其專用測試。
 先前 Mac 端 8 項測試通過（含實際 parser/live-source 的快取清除）；本次未修改 Mac 端。
 另以 pinned Carrot parser 驗證合成的 20 m/s 車速 → 72 km/h、設定 90 km/h、
 17 點路徑與前車、latActive=true。這是合成資料測試，不是實車紀錄或完整畫面測試。
@@ -100,7 +97,6 @@ PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdriv
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_hud_toggle.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_direct.py' -v
 PYTHONPATH=third_party/jetlink python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -p 'test_pipeline.py' -v
-PYTHONPATH=.:third_party/jetlink python -m unittest discover -s tools/jetlink/tests -p 'test_hud_ui.py' -v
 ```
 
 本版參考 Carrot `7e371b92` 的 HUD publisher/receiver 分層與 `carrotMAC-HUD`

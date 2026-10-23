@@ -1,6 +1,4 @@
 from openpilot.cereal import log
-from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.modeld.jetlink import hud
 
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigToggle, BigParamControl, BigMultiParamToggle
@@ -37,10 +35,6 @@ class TogglesLayoutMici(NavScroller):
                                              "Audio is included in dashcam videos in sunnylink.")
     jetlink_toggle = BigParamControl("Jetlink Mac (experimental)", "JetlinkEnabled", toggle_callback=restart_needed_callback)
     jetlink_toggle.set_enabled(lambda: not ui_state.started)
-    self._hud_storage_ok = True
-    self._hud_toggle = BigToggle("HUD", toggle_callback=self._on_hud_toggle)
-    self._hud_toggle.set_enabled(lambda: not ui_state.started and self._hud_storage_ok)
-    self._refresh_hud_toggle()
     enable_openpilot = BigParamControl("enable sunnypilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback,
                                        description="Enable to use sunnypilot driver assistance.\n" +
                                                    "Disable to use your car's stock driver assistance.")
@@ -50,7 +44,6 @@ class TogglesLayoutMici(NavScroller):
       self._personality_toggle,
       self._initial_cruise_speed,
       jetlink_toggle,
-      self._hud_toggle,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -97,35 +90,9 @@ class TogglesLayoutMici(NavScroller):
     ui_state.params.put_bool("IsMetric", state, block=True)
     self._update_toggles()
 
-  def _refresh_hud_toggle(self):
-    # Read only when opening/refreshing settings or after a click, not per frame.
-    try:
-      self._hud_toggle.set_checked(hud.ENABLE.is_file())
-      self._hud_storage_ok = True
-    except OSError:
-      self._hud_storage_ok = False
-      self._hud_toggle.set_checked(False)
-      self._hud_toggle.set_text("HUD: error")
-      cloudlog.exception("Unable to read HUD setting")
-
-  def _on_hud_toggle(self, enabled: bool):
-    try:
-      if ui_state.started:
-        raise ValueError("Vehicle started")
-      hud.set_enabled(enabled, ui_state.params)
-    except (ValueError, OSError):
-      self._hud_toggle.set_text("HUD: error")
-      self._hud_toggle.trigger_shake()
-      cloudlog.exception("HUD setting unchanged")
-    else:
-      self._hud_toggle.set_text("HUD")
-    finally:
-      self._refresh_hud_toggle()
-
   def _update_toggles(self):
     ui_state.update_params()
     self._initial_cruise_speed.refresh()
-    self._refresh_hud_toggle()
 
     if ui_state.CP is not None:
       self._personality_toggle.set_visible(ui_state.has_longitudinal_control)
