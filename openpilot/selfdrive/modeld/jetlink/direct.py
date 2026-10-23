@@ -268,6 +268,14 @@ class DirectClient:
           after_enqueue()
         if seq is None:
           return None
+        if self.hud is not None:
+          # Queue behind this model request, before spending the frame budget
+          # waiting for its reply. Post-reply-only HUD can starve on slow models.
+          model_send = self.client.t.last_send
+          try:
+            self.hud.send(self.client, deadline=deadline, after_seq=seq)
+          finally:
+            self.client.t.last_send = model_send
         hold = max(0., deadline - time.monotonic()) if self.client.last_output is not None else None
         output = self.client.infer_end(seq, hold=hold)
         verified = self._verified_output() if output is not None else None

@@ -228,6 +228,37 @@ class PipelineTests(unittest.TestCase):
       self.assertIsNotNone(direct.take_ready())
       self.assertAlmostEqual(state.call_args.kwargs['timeout'], .05)
 
+  def test_hud_does_not_starve_when_replies_use_the_soft_budget(self):
+    from openpilot.selfdrive.modeld.jetlink.hud import HudSender, MESSAGE
+    direct = self.direct()
+    direct.hud = HudSender({})
+    self.addCleanup(direct.hud.close)
+    received_at = []
+    original_recv = self.wire.recv
+    for frame in range(80):
+      start = 10. + frame * .05
+      self.clock.return_value = start
+      direct.hud.latest = (10. + (frame // 4) * .2, b'{}')
+      def delayed_reply(timeout=None):
+        self.clock.return_value = start + .045
+        return original_recv(timeout)
+      def enqueue_reply():
+        seq = self.client.pending[-1].seq
+        self.wire.reply(seq, frame)
+      previous_sent = direct.hud.sent
+      with patch.object(self.wire, 'recv', side_effect=delayed_reply):
+        self.assertIsNotNone(direct.infer_frame(self.image, self.packed, frame, frame == 0,
+                                              start + .046, enqueue_reply))
+      if direct.hud.sent > previous_sent:
+        received_at.append(start)
+      self.assertEqual(len(self.client.pending), 0)
+    self.assertGreaterEqual(len(received_at), 15)
+    self.assertLessEqual(len(received_at), 20)
+    self.assertLess(max(b - a for a, b in zip(received_at, received_at[1:])), .301)
+    self.assertEqual(sum(kind == MESSAGE for kind, _, _ in self.wire.sent), len(received_at))
+    self.assertEqual(sum(kind == P.Msg.INFER_REQ for kind, _, _ in self.wire.sent), 80)
+    self.assertEqual(self.wire.events[:3], ['send', 'send', 'recv'])
+
   def test_state_query_bounds_its_send_as_well_as_its_receive(self):
     self.wire.replies.append(Message(P.Msg.STATE_RESP, 1, 0, memoryview(b'{"loaded":"test"}')))
     with patch.object(self.wire, 'send', wraps=self.wire.send) as send:

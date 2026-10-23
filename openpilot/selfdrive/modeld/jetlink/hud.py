@@ -97,13 +97,16 @@ class HudSender:
       self.latest = read_packet(self.path) if ENABLE.is_file() else None
       self.stop.wait(.05)
 
-  def send(self, client, deadline=None):
+  def send(self, client, deadline=None, after_seq=None):
     now = time.monotonic()
     item = self.latest
     if self.disabled or self.stop.is_set() or item is None or now < self.next_send:
       return False
-    # Never insert display traffic while any model reply is outstanding.
-    if getattr(client, 'pending', ()) or (deadline is not None and deadline - now < .003):
+    # A small display packet may follow the one model request just enqueued,
+    # while the host computes its reply. Never add it behind a model backlog.
+    pending = getattr(client, 'pending', ())
+    just_enqueued = (after_seq is not None and len(pending) == 1 and pending[0].seq == after_seq)
+    if (pending and not just_enqueued) or (deadline is not None and deadline - now < .003):
       self.skipped += 1
       return False
     stamp, data = item

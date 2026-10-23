@@ -104,6 +104,29 @@ class SenderTests(unittest.TestCase):
     self.client.t.send.assert_not_called()
     self.assertEqual(self.sender.last_stamp, 0.)
 
+  def test_only_exact_single_enqueued_request_allows_early_hud(self):
+    self.client.pending = [SimpleNamespace(seq=5)]
+    self.assertFalse(self.sender.send(self.client, after_seq=4))
+    self.assertFalse(self.sender.send(self.client))
+    self.client.pending.append(SimpleNamespace(seq=6))
+    self.assertFalse(self.sender.send(self.client, after_seq=6))
+    self.client.pending.pop()
+    self.assertFalse(self.sender.send(self.client, deadline=10.052, after_seq=5))
+    self.client.t.try_send.assert_not_called()
+    self.assertTrue(self.sender.send(self.client, deadline=10.1, after_seq=5))
+    self.client.t.recv.assert_not_called()
+
+  def test_early_hud_keeps_backpressure_and_staleness_guards(self):
+    self.client.pending = [SimpleNamespace(seq=5)]
+    self.client.t.try_send.return_value = False
+    self.assertFalse(self.sender.send(self.client, after_seq=5))
+    self.client.t.send.assert_not_called()
+    self.assertEqual(self.sender.last_stamp, 0.)
+    self.clock.return_value = 10.5
+    self.client.t.try_send.reset_mock()
+    self.assertFalse(self.sender.send(self.client, after_seq=5))
+    self.client.t.try_send.assert_not_called()
+
   def test_transport_failure_disables_only_hud(self):
     self.client.t.try_send.side_effect = RuntimeError('USB busy')
     with self.assertLogs('sunnypilot.jetlink.hud', level='ERROR'):

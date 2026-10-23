@@ -1,5 +1,24 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
+## 修正模型忙碌時 HUD 傳送機會不足（2026-10-24）
+
+實機分別量測 C4 五秒內 26 個發布封包、最大年齡 0.201 秒；
+Mac 五秒內 11 個不同接收封包、最大年齡 1.857 秒。
+影片顯示時鐘仍更新，車況卻切回 HUD data unavailable。
+這支持資料傳送／接收間斷，尚不能單憑兩次非同步量測排除所有 USB 或 Mac 因素。
+
+舊 DirectClient 只在模型回覆完成後嘗試傳 HUD，當軟期限只剩不到 3 ms 時會一直略過。
+本版增加模型請求完整入列後、等待回覆前的傳送機會：
+只允許恰好一筆 outstanding request，且序號必須是本次剛送出的 request。
+已有多筆模型積壓、時間不足或 USB backpressure 時仍略過。
+保留模型優先的入列順序、5 Hz/14 KiB 上限、單一 USB owner 與非阻塞 try_send；
+HUD 不讀取任何回覆，也不延長模型期限或車況有效期。
+
+59 項 Jetlink 測試通過。新增四秒／80 幀合成測試，每次模型回覆都用掉 45 ms，
+軟期限為 46 ms：舊程式 HUD 發送數為 0；修正後通過 15–20 包、最大間隔 0.301 秒內的斷言。
+驗證多筆積壓、錯誤序號、期限不足、過期資料與 backpressure 均不強行發送。
+這是可供停車驗證的候選，尚未證實實機 HUD 頻率、模型延遲或 USB 延遲已改善。
+
 ## 修正點擊崩潰並恢復 HUD 開關（2026-10-23）
 
 實機 swaglog.0000001022 與 1026 均記錄 UI 點擊回呼在讀取 `IsOnroad` 時
@@ -28,8 +47,8 @@
 - 預設關閉。Mac 宣告 HUD 能力後啟動低優先序待命程序；開關即時控制資料傳送。
   關閉時不訂閱／編碼車況，清除暫存資料；再次開啟會重新訂閱，不需重設 USB 或重啟 C4。
 - 最多 5 Hz、每個 JSON 最多 14 KiB，保留最新一包。實際 FunctionFS 傳輸還有 framing/alignment。
-- 閒置時由 jetlinkd 傳送；USB lease 交給 modeld 後，由 DirectClient 在模型回覆完成、
-  沒有 pending inference、且當幀至少剩 3 ms 時嘗試送 HUD。資料序號使用原 client。
+- 閒置時由 jetlinkd 傳送；USB lease 交給 modeld 後，由 DirectClient 在唯一模型請求入列後、
+  等待回覆前嘗試送 HUD，也保留回覆完成且無積壓時的機會；當幀至少須剩 3 ms。資料序號使用原 client。
   `try_send` 遇到佇列壓力略過，不另外開 USB、不讀取／消耗 HUD acknowledgement。
 - 停用或資料過期不重播舊資料。Mac 接收封包超過 0.5 秒失效；各車況來源也個別檢查時效。
   可用來源改變會清除 renderer parser 的路徑／前車／啟用狀態快取。
@@ -85,7 +104,7 @@ HUD 安裝不替換原 Jetlink App；它的模型選擇與 App 版本保持原�
 
 離線測試涵蓋欄位／單位、MADS、有限數值、資料大小與過期、USB 背壓與序號、
 無 HUD 回覆下連續模型輸出、原有 USB lease／清理／模型契約回歸。
-本版 C4 端 55 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle、test_hud_params），
+本版 C4 端 59 項離線測試通過（test_direct、test_pipeline、test_hud、test_hud_toggle、test_hud_params），
 包含精簡回覆與 HUD 共用序號、無 HUD acknowledgement 下的連續模型輸出。
 另涵蓋關→開→關→開的資料更新、停用時取消訂閱、重新開啟取得新資料，
 以及指令共用設定與行駛中鎖定。
