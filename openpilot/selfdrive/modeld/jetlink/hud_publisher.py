@@ -14,6 +14,8 @@ from openpilot.selfdrive.modeld.jetlink.hud import ENABLE, PACKET, HEADER, MAX_B
 SOURCE = 'hkg_hud_v1'
 SERVICES = ('carState', 'controlsState', 'selfdriveState', 'carControl', 'modelV2', 'radarState', 'deviceState')
 LINE = {'x': 17, 'y': 17, 'z': 17, 't': 17}
+# Only the first prediction sample is consumed by Carrot's visual lead parser.
+MODEL_LEAD = {**{k: 1 for k in ('x', 'y', 'v', 'a', 'xStd', 'yStd')}, 'prob': None, 'probTime': None}
 LEAD = {k: None for k in ('status', 'dRel', 'yRel', 'vRel', 'aRel', 'vLead', 'vLeadK', 'aLeadK', 'radar', 'modelProb', 'radarTrackId')}
 FIELDS = {
   'carState': {**{k: None for k in ('vEgo', 'vEgoCluster', 'aEgo', 'steeringAngleDeg', 'steeringPressed',
@@ -25,6 +27,7 @@ FIELDS = {
     'alertText1', 'alertText2', 'alertSize', 'alertStatus', 'alertType')},
   'carControl': {k: None for k in ('latActive', 'longActive', 'enabled')},
   'modelV2': {'position': LINE, 'laneLines': [LINE, 4], 'laneLineProbs': 4, 'roadEdges': [LINE, 2],
+    'leadsV3': [MODEL_LEAD, 3], 'velocity': {'x': 1},
     'roadEdgeStds': 2, 'meta': {k: None for k in ('laneChangeState', 'laneChangeDirection')},
     'frameId': None, 'frameDropPerc': None, 'modelExecutionTime': None},
   'radarState': {'leadOne': LEAD, 'leadTwo': LEAD},
@@ -49,7 +52,7 @@ def select(value, spec):
   if isinstance(spec, int):
     values = list(value)
     if len(values) > spec:
-      values = [values[round(i * (len(values) - 1) / (spec - 1))] for i in range(spec)]
+      values = values[:1] if spec == 1 else [values[round(i * (len(values) - 1) / (spec - 1))] for i in range(spec)]
     selected = [select(v, None) for v in values]
     return selected if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in selected) else []
   if isinstance(value, bool):
@@ -67,6 +70,14 @@ def snapshot(sm, now, onroad, metric, active=False):
     if sm.valid[name] and sm.alive[name] and 0 <= elapsed < limit:
       data[name] = select(sm[name], FIELDS[name])
       age[name] = elapsed
+  # HKG's current RadarState uses present; the pinned Carrot parser uses status.
+  # An explicit false present must win over any legacy status value.
+  if 'radarState' in data:
+    for name in ('leadOne', 'leadTwo'):
+      source = get(sm['radarState'], name)
+      lead = data['radarState'].get(name)
+      if lead is not None:
+        lead['status'] = bool(get(source, 'present', get(source, 'status', False)))
   # Same compatibility fallback as sunnypilot's own speed HUD. kph stays kph.
   car = data.get('carState')
   if car is not None and car.get('vCruiseCluster') == 0 and 'controlsState' in data:

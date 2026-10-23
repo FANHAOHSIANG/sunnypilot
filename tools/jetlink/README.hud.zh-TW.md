@@ -1,5 +1,34 @@
 # hkg Jetlink → Carrot Mac HUD：第一版測試移植
 
+## 車道、車速與前車對接複查（2026-10-24）
+
+發現並修正兩個前車資料缺口：
+- HKG `RadarState.LeadData` 使用 `present`，pinned Carrot 讀取 `status`。publisher 現在將兩個 lead 的旗標轉換；明確的 present=false 優先，保留舊 status 相容性。
+- 補送 `modelV2.leadsV3`（最多三組預測的第一個位置／速度／加速度與不確定度）及模型第一個自車速度，讓原版視覺 lead parser 可工作。三組模型預測不代表三輛不同實車。
+
+| 項目 | 完整資料鏈測試結果 |
+| --- | --- |
+| 車速 | vEgo=20 m/s → 72 km/h；vEgoCluster=20.5 → 顯示速度欄位 73.8 km/h；停車回到 0 |
+| 設定速度 | vCruiseCluster=90 km/h 保持 90，沒有重複乘 3.6 |
+| 車道與路徑 | 四條曲線、兩條道路邊緣、路徑均到達 Carrot UI state；33 點取樣成 17 點，保留端點與左右方向；低機率車道隱藏 |
+| 前車 | present=true 的 leadOne/leadTwo 可見；雷達 yRel 左正轉為繪圖 lateral 左負；距離、相對速度、絕對速度與 TTC 核對通過 |
+| 視覺前車 | 無 radarState 時可從 leadsV3 取得目標；低機率預測排除；保留 Carrot 相機到保桿距離修正 |
+| 過期／消失 | present=false 清除目標；model/radar service 消失或封包過期時清除真實路徑和目標，過期顯示無資料 |
+
+使用實際 publisher → JSON → Mac read_packet → pinned Carrot live parser → UI state。
+舊版 897b2932d 在前車／視覺前車兩項測試均得到 0 個目標，修正後五項資料鏈測試通過。
+另有 61 項 Jetlink 測試及 23 項 Mac 測試通過（Mac 測試含上述五項）。
+測試命令：
+
+```sh
+CARROT_HELPER_ROOT=/path/to/carrot HKG_CHECKOUT=/path/to/sunnypilot python -m unittest discover -s tests -v
+```
+
+本次 runtime 修改只有 C4 publisher；既有 Mac adapter/renderer 可直接消費新欄位，不必重建 App。
+不擴大 14 KiB／5 Hz 上限，不修改 CAN、控制、模型推論或資料有效期。
+未接入 liveTracks、側後方角雷達／Carrot 特有 CAN 解碼、導航速限與相機串流；不能宣稱完整周遭車輛偵測。
+仍需實機核對畫面與延遲；上述為合成資料測試，並非實車、GPU 或 USB 驗證。
+
 ## 修正模型忙碌時 HUD 傳送機會不足（2026-10-24）
 
 實機分別量測 C4 五秒內 26 個發布封包、最大年齡 0.201 秒；

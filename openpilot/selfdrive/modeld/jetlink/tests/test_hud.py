@@ -21,7 +21,7 @@ class Sources:
       'selfdriveState': dict(enabled=False, alertSize='none'),
       'carControl': dict(latActive=True, longActive=False),
       'modelV2': dict(position=line, laneLines=[line] * 4, laneLineProbs=[.1, .9, .9, .1], roadEdges=[line] * 2),
-      'radarState': dict(leadOne=dict(status=True, dRel=30., yRel=1.5, vRel=-2.)),
+      'radarState': dict(leadOne=dict(present=True, dRel=30., yRel=1.5, vRel=-2.)),
       'deviceState': dict(started=True),
     }
 
@@ -30,6 +30,27 @@ class Sources:
 
 
 class SnapshotTests(unittest.TestCase):
+  def test_current_present_and_legacy_status_are_normalized(self):
+    for flags, expected in (({'present': True}, True), ({'present': False}, False),
+                            ({'present': False, 'status': True}, False),
+                            ({'status': True}, True), ({}, False)):
+      with self.subTest(flags=flags):
+        sm = Sources()
+        sm.values['radarState'] = {key: dict(flags, dRel=30.) for key in ('leadOne', 'leadTwo')}
+        radar = json.loads(encode(snapshot(sm, 10.05, True, True)))['hkg']['radarState']
+        self.assertEqual([radar[k]['status'] for k in ('leadOne', 'leadTwo')], [expected] * 2)
+
+  def test_visual_leads_keep_current_sample_and_budget(self):
+    sm = Sources()
+    lead = dict(prob=.9, probTime=0., **{k: list(range(6)) for k in ('x', 'y', 'v', 'a', 'xStd', 'yStd')})
+    sm.values['modelV2'].update(leadsV3=[lead] * 3, velocity={'x': list(range(33))})
+    payload = encode(snapshot(sm, 10.05, True, True))
+    model = json.loads(payload)['hkg']['modelV2']
+    self.assertEqual(len(model['leadsV3']), 3)
+    self.assertEqual(model['leadsV3'][0]['x'], [0])
+    self.assertEqual(model['velocity']['x'], [0])
+    self.assertLessEqual(len(payload), hud.MAX_BYTES)
+
   def test_units_axes_mads_and_payload_budget(self):
     record = snapshot(Sources(), 10.05, True, True, True)
     data = record['hkg']
