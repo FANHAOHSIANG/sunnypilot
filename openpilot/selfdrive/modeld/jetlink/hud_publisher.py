@@ -138,6 +138,8 @@ def main():
   from pathlib import Path
   sm = params = None
   status = Path('/dev/shm/sunnypilot-jetlink-model.json')
+  from openpilot.selfdrive.modeld.jetlink.hud_radar_trial import apply_trial
+  boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
   tmp = PACKET.with_suffix('.tmp')
   try:
     while True:
@@ -164,6 +166,7 @@ def main():
       except (OSError, ValueError, KeyError, TypeError):
         pass
       record = snapshot(sm, now, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
+      apply_trial(record, now, boot_id)
       tmp.write_bytes(HEADER.pack(now) + encode(record))
       os.replace(tmp, PACKET)
       time.sleep(max(0., PERIOD - (time.monotonic() - start)))

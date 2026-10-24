@@ -1,0 +1,75 @@
+{
+  "provenance": "Synthetic vectors encoded with cantools from unmodified ajouatom/openpilot a564ce1dc082909b1fdc73b72e64d920336b34d6 DBC generator; not vehicle captures",
+  "vectors": [
+    {
+      "family": "front210",
+      "address": 528,
+      "raw": "0000000000140000906104383f0000000000000000140000f4a1fb6400000000",
+      "expected": [
+        [
+          20,
+          3.5,
+          -2
+        ],
+        [
+          25,
+          -3.5,
+          1
+        ]
+      ]
+    },
+    {
+      "family": "front3a5",
+      "address": 933,
+      "raw": "0000000300140000c8a0fb383f0000000000000000000000",
+      "expected": [
+        [
+          20,
+          -3.5,
+          -2
+        ]
+      ]
+    },
+    {
+      "family": "front400",
+      "address": 1024,
+      "raw": "0000000700500000dd3002f6030000000000000000000000",
+      "expected": [
+        [
+          20,
+          3.5,
+          -2
+        ]
+      ]
+    },
+    {
+      "family": "corner235",
+      "address": 565,
+      "raw": "000000500c7000002c8111423d00000000000000000000000000000000000000",
+      "expected": [
+        [
+          15,
+          3.5,
+          -2
+        ]
+      ]
+    },
+    {
+      "family": "corner180",
+      "address": 384,
+      "raw": "000000500c7000002c8111423d000000000000460c8000000000f1213f000000",
+      "expected": [
+        [
+          15,
+          3.5,
+          -2
+        ],
+        [
+          0,
+          -3,
+          1
+        ]
+      ]
+    }
+  ]
+}
