@@ -37,3 +37,12 @@ Branch: `hkg-fca-aeb-preservation-lab`, forked from `hkg-enhanced-jetlink`.
 7. Never suppress the FCA indicator solely for cosmetics, or attempt collision provocations. Only pursue bench/simulation validation first and qualified controlled closed-track validation before authorizing vehicle use.
 
 **No actuation, ECU-disable, CAN TX, or Panda Safety code was changed.**
+
+## Verified correction: ESCC flag coherence and CAN FD (2026-10-25)
+Pinned source: [escc.py](https://github.com/TonyBinheWu/opendbc/blob/1c51731784729da5ebaf24b3c34106bd27aaf94b/opendbc/sunnypilot/car/hyundai/escc.py): `EnhancedSmartCruiseControl.enabled` returns `CP_SP.flags & HyundaiFlagsSP.ENHANCED_SCC`. In this version controller `self.ESCC.enabled` and interface `CP_SP.flags & ENHANCED_SCC` therefore read the same flag; previous suspicion of a discrepancy was not established.
+
+Pinned [interface.py](https://github.com/TonyBinheWu/opendbc/blob/1c51731784729da5ebaf24b3c34106bd27aaf94b/opendbc/car/hyundai/interface.py) `_get_params_sp`: `ENHANCED_SCC` is set based on `ESCC_MSG=0x2AB` only inside `if not stock_cp.flags & HyundaiFlags.CANFD`. Thus old CAN-only ESCC preservation cannot simply be ported to CAN FD Ioniq 5.
+
+Pinned [hyundai_canfd.h](https://github.com/TonyBinheWu/opendbc/blob/1c51731784729da5ebaf24b3c34106bd27aaf94b/opendbc/safety/modes/hyundai_canfd.h): SCC_CONTROL 0x1A0 is checked for longitudinal acceleration, and different steering configurations use different CAN buses; 0x160 appears in allowlists and relay checks. None of these demonstrate functional AEB.
+
+**Disposition:** no ECU-disabling, warning suppression, or Panda transmit-rule changes are justified by current evidence. Gather real Ioniq 5 CarParams, passive bus observations, and inspect camera-SCC arbitration before writing an actuation patch. DO NOT DEPLOY.
