@@ -12,10 +12,7 @@ from pathlib import Path
 WATCH = {0x160: "ADRV_0x160", 0x1A0: "SCC_CONTROL", 0x730: "ADAS_UDS", 0x7D0: "RADAR_UDS"}
 
 def summarize(path):
-    try:
-        from openpilot.tools.lib.logreader import LogReader
-    except ImportError:
-        from openpilot.tools.lib.logreader import LogReader
+    from openpilot.tools.lib.logreader import LogReader
     counts = Counter()
     payloads = {}
     messages = 0
@@ -58,12 +55,13 @@ def main():
         outputs.append(summarize(f))
     report = {
         "analysis_type": "passive_CAN_frame_inventory",
-        "warning": "Cannot determine AEB operability from counts/payloads alone. RX and TX are not the same.",
+        "warning": "Counts do not establish FCA or AEB functionality. Output may contain sensitive driving-related data; do not share unredacted files publicly.",
         "results": outputs
     }
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     print(rendered)
     if args.json_file:
+        args.json_file.parent.mkdir(parents=True, exist_ok=True)
         args.json_file.write_text(rendered + "\n", encoding="utf-8")
 
 if __name__ == "__main__":
