@@ -25,3 +25,23 @@ Source preflight verifies the specific target gitlink revisions and searches for
 5. Confirm both FCW and AEB separately with qualified test facility closed-course procedure. No live deployment before this gate.
 
 Do not use warning-lamp disappearance as a success signal.
+
+## Route 0000004f: timestamped read-only FCA diagnostics
+
+For the original running `hkg-enhanced-jetlink` C4, **do not switch branches**. With vehicle parked and logs already present:
+
+```bash
+cd /data/openpilot
+curl -fL https://raw.githubusercontent.com/FANHAOHSIANG/sunnypilot/hkg-fca-aeb-preservation-lab/tools/fca_research/fca_scc_timeline.py -o /tmp/fca_scc_timeline.py
+PYTHONPATH=/data/openpilot:/data/openpilot/opendbc_repo python3 /tmp/fca_scc_timeline.py \
+  /data/media/0/realdata/0000004f--858ff9d82b--0/rlog.zst \
+  --output /tmp/ioniq5_fca_timeline.json
+```
+
+The report summarizes `sendcan` vs `can` frames and samples of `stockFcw`/`stockAeb` if those fields are recorded. Missing fields or no samples do not imply functional absence. The code does not change the running control stack, ECU state, or Panda Safety. **Do not attempt to induce FCW/AEB events on public roads.**
+
+Synthetic source-only tests (Windows or Linux):
+```bash
+python tools/fca_research/test_fca_scc_timeline.py
+```
+These tests exercise only a fake log reader and do not prove vehicle safety. The branch includes a GitHub Actions workflow for syntax and synthetic tests; workflow execution and results must be checked separately.
