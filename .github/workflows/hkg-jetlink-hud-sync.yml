@@ -2,7 +2,7 @@ name: HKG Jetlink HUD sync
 
 on:
   schedule:
-    - cron: '3 4 * * *'
+    - cron: '3 4 * * 1'
   workflow_dispatch:
   pull_request:
     types: [closed]
