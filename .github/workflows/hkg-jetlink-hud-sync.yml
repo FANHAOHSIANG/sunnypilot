@@ -1,0 +1,89 @@
+name: HKG Jetlink HUD sync
+
+on:
+  schedule:
+    - cron: '3 4 * * 1'
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [hkg-enhanced-jetlink]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: hkg-jetlink-hud-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-hud:
+    if: github.repository == 'FANHAOHSIANG/sunnypilot' && (github.event_name != 'pull_request' || github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      SOURCE_BRANCH: hkg-enhanced-jetlink
+      TARGET_BRANCH: hkg-enhanced-jetlink-hud
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hkg-enhanced-jetlink-hud
+          fetch-depth: 0
+          lfs: false
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Trial merge Jetlink into HUD
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin "$SOURCE_BRANCH" "$TARGET_BRANCH"
+          if git merge-base --is-ancestor "origin/$SOURCE_BRANCH" HEAD; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'HUD already contains the Jetlink branch.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          if ! git merge --no-edit "origin/$SOURCE_BRANCH"; then
+            echo 'Merge conflict: resolve manually; neither installed branch was changed.' >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+      - name: Check merged Jetlink and HUD
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install numpy pytest pycapnp requests
+          git submodule update --init --depth 1 tinygrad_repo opendbc_repo panda
+          python tools/jetlink/check_panda_compat.py --self-test
+          python tools/jetlink/check_panda_compat.py
+          python -m unittest discover -s openpilot/selfdrive/modeld/jetlink/tests -v
+          python -m compileall -q openpilot/selfdrive/modeld/jetlink openpilot/selfdrive/modeld/modeld.py
+          PYTHONPATH=third_party/jetlink python -m pytest -q -c /dev/null third_party/jetlink/tests/test_registry.py
+          PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_bsm_compat -v
+          PYTHONPATH=opendbc_repo python -m unittest openpilot.sunnypilot.selfdrive.car.tests.test_dynamics_compat -v
+          python -m unittest openpilot.selfdrive.ui.tests.test_blue_path openpilot.selfdrive.ui.tests.test_sunnylink_translations -v
+          python tools/commaview/install.py --check
+          git -c core.whitespace=-blank-at-eof diff --check "origin/$TARGET_BRANCH" HEAD
+      - name: Open HUD update PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Existing HUD update PR: #$existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh pr create --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" \
+            --title 'Sync Jetlink updates into the HUD branch' \
+            --body 'Merges the maintained Jetlink branch into HUD, preserving HUD history. A local trial merge and software regression checks passed at workflow runtime. Review the current PR diff and validate C4/Mac HUD behavior before merging; later source commits require fresh checks. No automatic merge or device update is performed.'
