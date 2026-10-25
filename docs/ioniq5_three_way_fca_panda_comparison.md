@@ -58,3 +58,22 @@ According to pinned `opendbc/car/hyundai/values.py`:
 - **Priority new candidate cause:** pinned `carcontroller.py` calls `create_fca_warning_light()` on CAN FD non-LKA path whenever `openpilotLongitudinalControl` is true; pinned `hyundaicanfd.py` emits `ADRV_0x160` with `AEB_SETTING=1`, with source comment `show AEB disabled icon`. This is a credible *warning-light signaling hypothesis*, NOT proof of AEB functionality either way.
 - Earlier carrot-wip source has `create_fca_warning_light(CP,...)` with a `CAMERA_SCC` guard. `CAMERA_SCC` and `CANFD_CAMERA_SCC` are distinct flags, so the exact user car path must be traced before attempting any patch.
 - **Do not suppress or alter warning signaling to create a false impression that AEB is active.** Confirm OEM ECU status and AEB independently before any actuation/vehicle deployment.
+
+## Actual route 0000004f segment 0 passive CAN inventory (2026-10-25)
+
+User ran `tools/fca_research/compare_logged_can.py` against `/data/media/0/realdata/0000004f--858ff9d82b--0/rlog.zst`. The inventory returned **17,171 watched frames**.
+
+- sendcan bus 0: `ADRV_0x160` 2,486 frames; `SCC_CONTROL (0x1A0)` 2,486 frames.
+- can bus 0: `ADRV_0x160` 542; `SCC_CONTROL` 543.
+- can bus 2: `ADRV_0x160` 3,047; `SCC_CONTROL` 3,046.
+- can bus 128: `ADRV_0x160` 2,485; `SCC_CONTROL` 2,485. These are not evidence of an additional physical OEM bus/ECU without Panda source interpretation.
+- can bus 192: 2 frames each for `ADRV_0x160` and `SCC_CONTROL`.
+- sendcan `0x730` bus 0 4 / bus 1 5; sendcan `0x7D0` bus 0 5 / bus 1 6. Examples `02 3e 00...` and `03 22 f100...` are diagnostic session/query traffic, not evidence of a `28 83 01` ECU-disable command or `3e 80` keep-disabled message in this inventory.
+
+Sample `sendcan` 0x160 payload ends `...02fffc0900...`, whereas one `can` bus-2 sample ends `...02fffc0100...`. These are different bytes, **not yet DBC-decoded AEB states**. Direction/bus and time should be matched before attributing to ECU behavior.
+
+Pinned target `carcontroller.py` invokes `create_fca_warning_light` on CAN FD non-LKA longitudinal; `hyundaicanfd.py` sets `AEB_SETTING=1` and sends `ADRV_0x160`. Actual outgoing 0x160 in the user log supports that this transmit path is active.
+
+Crucial: carrot-wip's `create_fca_warning_light(CP,...)` skips only `HyundaiFlags.CAMERA_SCC`; the user's flag is `CANFD_CAMERA_SCC`, which is **not identical**. Simply transplanting this condition would not avoid the output in this specific configuration. No OEM AEB claim is warranted.
+
+**Next safe verification:** timestamp-aligned passive review of OEM FCA/DTC status and both RX/TX 0x160, then qualified bench/closed-course confirmation of AEB. Do not remove or suppress warning messages solely to clear the lamp. This document contains no control-plane edits.
