@@ -15,21 +15,7 @@ sys.path.insert(0, str(ROOT))
 from openpilot.selfdrive.modeld.jetlink.hud_radar_trial import PassiveRadar, TRIAL_PACKET, FAMILIES
 
 
-def installed_bus():
-  from openpilot.common.params import Params
-  from opendbc.car import structs
-  from opendbc.car.hyundai.hyundaicanfd import CanBus
-  from opendbc.car.hyundai.values import HyundaiFlags
-  raw = Params().get('CarParams')
-  if not raw:
-    raise ValueError('尚未取得 CarParams；請等 C4 完成車型辨識')
-  with structs.CarParams.from_bytes(raw) as cp:
-    if cp.carFingerprint != 'HYUNDAI_IONIQ_5' or not cp.flags & HyundaiFlags.CANFD:
-      raise ValueError('這個實測版只接受 HYUNDAI_IONIQ_5 CAN FD')
-    bus = CanBus(cp).ACAN
-    if bus not in (0, 1, 4, 5):
-      raise ValueError('無法確認 A-CAN bus')
-    return bus
+from openpilot.selfdrive.modeld.jetlink.hud_radar_live import installed_bus
 
 
 def hud_count(now):

@@ -168,14 +168,15 @@ and three consecutive observations per target are needed before display.
                 bus=self.bus, groups=sorted(active), ambiguous_front=len(fronts) > 1, points=points[:32])
 
 
-def apply_trial(record, now, boot_id, path=TRIAL_PACKET):
+def apply_trial(record, now, boot_id, path=TRIAL_PACKET, *, trial=None):
   """Merge only into outgoing HUD JSON, never the car's radarTracks service."""
   try:
-    with path.open('rb') as stream:
-      raw = stream.read(16385)
-    if len(raw) > 16384:
-      return False
-    trial = json.loads(raw)
+    if trial is None:
+      with path.open('rb') as stream:
+        raw = stream.read(16385)
+      if len(raw) > 16384:
+        return False
+      trial = json.loads(raw)
     if (not isinstance(trial, dict) or trial.get('source') != SOURCE or trial.get('version') != 1 or
         trial.get('boot_id') != boot_id or type(trial.get('updated')) not in (int, float)):
       return False

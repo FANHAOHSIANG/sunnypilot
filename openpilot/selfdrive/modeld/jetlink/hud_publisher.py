@@ -137,14 +137,19 @@ def main():
   os.nice(10)
   from pathlib import Path
   sm = params = None
+  radar = None
   status = Path('/dev/shm/sunnypilot-jetlink-model.json')
   from openpilot.selfdrive.modeld.jetlink.hud_radar_trial import apply_trial
+  from openpilot.selfdrive.modeld.jetlink.hud_radar_live import LiveRadar
   boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
   tmp = PACKET.with_suffix('.tmp')
   try:
     while True:
       if not ENABLE.is_file():
         # Stay available for live enable, but unsubscribe and do no serialization.
+        if radar is not None:
+          radar.close()
+          radar = None
         sm = params = None
         tmp.unlink(missing_ok=True)
         PACKET.unlink(missing_ok=True)
@@ -154,6 +159,7 @@ def main():
         from openpilot.cereal import messaging
         from openpilot.common.params import Params
         sm, params = messaging.SubMaster(list(SERVICES)), Params()
+        radar = LiveRadar()
       start = time.monotonic()
       sm.update(0)
       # SubMaster timestamps received messages during update(). A timestamp
@@ -166,11 +172,15 @@ def main():
       except (OSError, ValueError, KeyError, TypeError):
         pass
       record = snapshot(sm, now, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
-      apply_trial(record, now, boot_id)
+      live = radar.snapshot(now, boot_id)
+      if live is not None:
+        apply_trial(record, now, boot_id, trial=live)
       tmp.write_bytes(HEADER.pack(now) + encode(record))
       os.replace(tmp, PACKET)
       time.sleep(max(0., PERIOD - (time.monotonic() - start)))
   finally:
+    if radar is not None:
+      radar.close()
     tmp.unlink(missing_ok=True)
     PACKET.unlink(missing_ok=True)
 
