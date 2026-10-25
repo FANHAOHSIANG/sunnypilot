@@ -1,0 +1,22 @@
+name: Ioniq 5 FCA offline diagnostics tests
+on:
+  push:
+    branches:
+      - hkg-fca-aeb-preservation-lab
+    paths:
+      - 'tools/fca_research/**'
+      - '.github/workflows/fca-offline-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  offline-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile diagnostics
+        run: python -m compileall -q tools/fca_research
+      - name: Synthetic CAN timeline regression
+        run: python tools/fca_research/test_fca_scc_timeline.py
