@@ -293,8 +293,7 @@ def c3_read(now, osm_m=None):
     big = max(float(lt.get('h') or 0) for lt in veh)
     red = max(max(float(lt['lamp'].get('red', 0)), float(lt['lamp'].get('yellow', 0)))
               for lt in veh if float(lt.get('h') or 0) >= big)
-  elif any(isinstance(lt.get('lamp'), dict) for lt in front):
-    red = 0.                     # every head read is not a vehicle signal (a pedestrian head, a sign)
+  # no vehicle head among those read (c3lights reads only the biggest - LAMP_MIN_FRAC): the red stays as it was
   return [round(1. - max(red, go, yellow), 3), round(red, 3), round(go, 3), round(yellow, 3)]
 
 

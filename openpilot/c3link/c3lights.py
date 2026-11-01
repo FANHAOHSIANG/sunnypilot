@@ -59,6 +59,10 @@ MODEL_CLS = os.environ.get('C3_CLS', os.path.join(HERE, 'models/lightcls_64.onnx
 MODEL_LAMP = os.environ.get('C3_LAMP', os.path.join(HERE, 'models/lampcls_96.onnx'))
 LAMP_OUTS = ['vehicle', 'pedestrian', 'red', 'yellow', 'green', 'left', 'straight', 'right', 'countdown']
 LAMP_MEAN, LAMP_STD = np.array([0.485, 0.456, 0.406], np.float32), np.array([0.229, 0.224, 0.225], np.float32)
+# ~33 ms a head on C3's CPU: on every box it added 40-255 ms to a ~480 ms cycle. tlwatchd takes the red from the biggest
+# vehicle head, so only boxes at least this share of the biggest box's height are read (the same 104 moments: one more
+# red on a green, 6 -> 7, nothing else changed).
+LAMP_MIN_FRAC = 0.5
 THREADS = int(os.environ.get('C3_THREADS', '4'))
 ALWAYS = os.environ.get('C3_ALWAYS', '0') == '1'      # testing: run whether or not the car is driving
 OUT_DIR = '/dev/shm/c3det'
@@ -198,8 +202,12 @@ def lamps(sess, frame, boxes):
     return None
   img = Image.fromarray(frame)
   name = sess.get_inputs()[0].name
+  hmax = max(y2 - y1 for _, y1, _, y2 in boxes)
   out = []
   for x1, y1, x2, y2 in boxes:
+    if y2 - y1 < LAMP_MIN_FRAC * hmax:     # tlwatchd only looks at the biggest heads - see LAMP_MIN_FRAC
+      out.append(None)
+      continue
     pad = 0.25 * max(x2 - x1, y2 - y1) + 3
     c = img.crop((int(x1 - pad), int(y1 - pad), int(x2 + pad), int(y2 + pad)))   # outside the frame comes in black, as trained
     s = 144 / max(c.size)
@@ -254,7 +262,7 @@ def dets_from(boxes, scores, probs, gate=None, now=0., lamp=None):
       keep.append((x1, y1, x2, y2))
     dets.append({'x': round(x1 / 2, 1), 'y': round(y1 / 2, 1), 'w': round((x2 - x1) / 2, 1), 'h': round((y2 - y1) / 2, 1),
                  'cls': c, 'zh': ZH[c], 'conf': round(pc, 3), 'det': round(score, 3)})
-    if lamp is not None:
+    if lamp is not None and lamp[i] is not None:
       dets[-1]['lamp'] = lamp[i]
   if gate is not None:
     gate.note(keep, now)
