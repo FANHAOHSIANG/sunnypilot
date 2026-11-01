@@ -125,7 +125,19 @@ CROSS_M = 20.0       # m either side of the heading a node may sit and still be 
 APPROACH_M = 160.0   # m: inside this of a signal ahead, read the light while moving
 MOVING = 3.0         # m/s
 LIGHT_P = 0.7
-LIGHT_HOLD = 2.0     # s a red / go call is held after the last cycle that agreed
+LIGHT_HOLD = 2.0     # s a go call is held after the last cycle that agreed
+# Held through readings that see nothing (2026-11-01). The driver: the HUD keeps going back to 'judging' after a light
+# was read. C3's finder takes ~460 ms a frame on its GPU (measured on C3), so it reads about once a second, and it
+# misses about a third of the lights; a call needs two readings in a row and was held 2 s, so two misses blanked it.
+# On 10/31's 232 approaches, replayed: held 2 s the call went back to unknown 67 times (4.6 a minute of read light);
+# red / yellow held LIGHT_HOLD_STOP and go LIGHT_HOLD 48 times; everything held LIGHT_SHOW_HOLD 13 times. A different
+# colour still takes over after two agreeing readings - only readings of nothing are held through.
+# What acts (light_ahead reads 'light') holds red / yellow longer - the cautious side: 3 times that day a red was held
+# while the next light read was green, 5 s in all - but a go no longer than before (held 5 s, 6 times the light read
+# next was red / yellow). The HUD is given the 5 s hold for every colour ('shown'), marked 'held' once LIGHT_HOLD has
+# passed since the last reading that agreed, so it can show it as not seen just now.
+LIGHT_HOLD_STOP = 5.0
+LIGHT_SHOW_HOLD = 5.0
 GPS_MAX_ACC = 25.0   # m: worse than this and the signal list is not trusted
 NEXT_SIGNAL_JUMP = 25.0  # m: the distance ahead growing by more than this = we passed one, a new one is ahead
 MEAN = np.array([0.485, 0.456, 0.406], np.float32).reshape(3, 1, 1)
@@ -195,20 +207,27 @@ class Signals:
 
 
 class LightCall:
-  """red / go once two cycles in a row agree, held LIGHT_HOLD s; otherwise unknown."""
+  """red / go once two cycles in a row agree, held LIGHT_HOLD s (red / yellow LIGHT_HOLD_STOP); otherwise unknown.
+  shown / held: the same call held LIGHT_SHOW_HOLD for the HUD, held = not confirmed for LIGHT_HOLD."""
 
   def __init__(self):
     self.last = None
     self.call, self.until = 'unknown', 0.
+    self.shown, self.shown_until, self.confirmed_t = 'unknown', 0., -1e9
+    self.held = False
 
   def update(self, p, t):
     yellow = len(p) > 3 and p[3] >= LIGHT_P
     c = 'red' if p[1] >= LIGHT_P else ('yellow' if yellow else ('go' if p[2] >= LIGHT_P else None))
     if c is not None and c == self.last:
-      self.call, self.until = c, t + LIGHT_HOLD
+      self.call, self.until = c, t + (LIGHT_HOLD if c == 'go' else LIGHT_HOLD_STOP)
+      self.shown, self.shown_until, self.confirmed_t = c, t + LIGHT_SHOW_HOLD, t
     self.last = c
     if t > self.until:
       self.call = 'unknown'
+    if t > self.shown_until:
+      self.shown = 'unknown'
+    self.held = self.shown != 'unknown' and t - self.confirmed_t > LIGHT_HOLD
     return self.call
 
   def reset(self):
@@ -535,7 +554,8 @@ def main():
           mode = ('standstill' if wait is not None else 'stopped' if look is not None
                   else 'approach' if osm_m is not None and osm_m <= APPROACH_M and st['v'] >= MOVING else 'idle')
           write_state({'t': now, 'mode': mode, 'osm_m': None if osm_m is None else round(osm_m, 1), 'osm_kind': osm_kind,
-                       'light': light.call, 'p': p_last, 'wait': ws, 'why': look['why'] if look is not None else None,
+                       'light': light.call, 'shown': light.shown, 'held': bool(getattr(light, 'held', False)),
+                       'p': p_last, 'wait': ws, 'why': look['why'] if look is not None else None,
                        'go': ({'age': round(now - go_shown[0], 1), 'sent': go_shown[1], 'cls_only': go_shown[2]}
                               if now - go_shown[0] < GO_SHOW else None),
                        # whether a GO from whoever is looking now would be pressed (C3's needs C3_GO too)
