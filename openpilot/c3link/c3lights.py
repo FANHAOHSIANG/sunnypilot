@@ -63,6 +63,7 @@ LAMP_MEAN, LAMP_STD = np.array([0.485, 0.456, 0.406], np.float32), np.array([0.2
 # vehicle head, so only boxes at least this share of the biggest box's height are read (the same 104 moments: one more
 # red on a green, 6 -> 7, nothing else changed).
 LAMP_MIN_FRAC = 0.5
+LAMP_MAX_N = 2      # ...and at most this many of them (on 10/29 frames 2-5 boxes passed the share: 37-167 ms)
 THREADS = int(os.environ.get('C3_THREADS', '4'))
 ALWAYS = os.environ.get('C3_ALWAYS', '0') == '1'      # testing: run whether or not the car is driving
 OUT_DIR = '/dev/shm/c3det'
@@ -203,9 +204,11 @@ def lamps(sess, frame, boxes):
   img = Image.fromarray(frame)
   name = sess.get_inputs()[0].name
   hmax = max(y2 - y1 for _, y1, _, y2 in boxes)
+  # tlwatchd only looks at the biggest heads - see LAMP_MIN_FRAC
+  big = sorted(range(len(boxes)), key=lambda i: boxes[i][1] - boxes[i][3])[:LAMP_MAX_N]
   out = []
-  for x1, y1, x2, y2 in boxes:
-    if y2 - y1 < LAMP_MIN_FRAC * hmax:     # tlwatchd only looks at the biggest heads - see LAMP_MIN_FRAC
+  for i, (x1, y1, x2, y2) in enumerate(boxes):
+    if i not in big or y2 - y1 < LAMP_MIN_FRAC * hmax:
       out.append(None)
       continue
     pad = 0.25 * max(x2 - x1, y2 - y1) + 3
