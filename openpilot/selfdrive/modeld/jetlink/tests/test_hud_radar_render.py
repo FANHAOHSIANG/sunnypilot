@@ -77,5 +77,25 @@ class RenderTests(unittest.TestCase):
     self.assertAlmostEqual(points[0].absolute_speed_kph, 75.6)
 
 
+  def test_c4_metrics_and_tpms_reach_actual_carrot_state(self):
+    path = Path(os.environ['MAC_CHECKOUT']) / 'tests/test_hkg_pipeline.py'
+    spec = importlib.util.spec_from_file_location('metrics_pipeline_fixture', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    fixture = module.PipelineTests()
+    fixture.setUp()
+    self.addCleanup(fixture.doCleanups)
+    fixture.values['deviceState'].update(cpuUsagePercent=[10., 30.], cpuTempC=[55., 60.],
+      memoryUsagePercent=40, freeSpacePercent=75.)
+    fixture.values['carState']['tpms'] = dict(fl=39., fr=40., rl=40., rr=41.)
+    state = fixture.update()
+    self.assertEqual(state.cpu_usage_percent, 20.)
+    self.assertEqual(state.cpu_temp_c, 60.)
+    self.assertEqual(state.memory_used_percent, 40.)
+    self.assertEqual(state.disk_used_percent, 25.)
+    self.assertEqual(state.tpms.fl, 39.)
+    self.assertEqual(state.tpms.rr, 41.)
+
+
 if __name__ == '__main__':
   unittest.main()

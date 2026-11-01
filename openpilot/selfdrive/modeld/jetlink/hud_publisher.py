@@ -21,6 +21,7 @@ FIELDS = {
   'carState': {**{k: None for k in ('vEgo', 'vEgoCluster', 'aEgo', 'steeringAngleDeg', 'steeringPressed',
     'leftBlinker', 'rightBlinker', 'leftBlindspot', 'rightBlindspot', 'brakePressed', 'gasPressed',
     'standstill', 'gearShifter', 'vCruise', 'vCruiseCluster')},
+    'tpms': dict.fromkeys(('fl', 'fr', 'rl', 'rr')),
     'cruiseState': {k: None for k in ('enabled', 'available', 'standstill', 'speed', 'speedCluster')}},
   'controlsState': {k: None for k in ('curvature', 'desiredCurvature')},
   'selfdriveState': {k: None for k in ('enabled', 'active', 'state', 'experimentalMode', 'personality',
@@ -31,7 +32,7 @@ FIELDS = {
     'roadEdgeStds': 2, 'meta': {k: None for k in ('laneChangeState', 'laneChangeDirection')},
     'frameId': None, 'frameDropPerc': None, 'modelExecutionTime': None},
   'radarState': {'leadOne': LEAD, 'leadTwo': LEAD},
-  'deviceState': {'started': None, 'deviceType': None},
+  'deviceState': {**dict.fromkeys(('started', 'deviceType', 'memoryUsagePercent', 'freeSpacePercent', 'networkType', 'networkStrength')), 'cpuUsagePercent': 16, 'cpuTempC': 16, 'gpuTempC': 16, 'memoryTempC': None},
   'radarTracks': {},  # sanitized separately; unknown lateral position is not zero
 }
 
@@ -119,9 +120,17 @@ def snapshot(sm, now, onroad, metric, active=False):
 def encode(record):
   data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
   if len(data) > MAX_BYTES and 'radarTracks' in record['hkg']:
-    # Extra targets must not crowd out the lanes/path or the primary lead.
-    record = dict(record, hkg={k: v for k, v in record['hkg'].items() if k != 'radarTracks'})
-    data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
+    record = dict(record, hkg=dict(record['hkg']))
+    tracks = dict(record['hkg']['radarTracks'])
+    points = list(tracks.get('points', []))
+    record['hkg']['radarTracks'] = tracks
+    while points and len(data) > MAX_BYTES:
+      points.pop()  # nearest-first list; retain nearby targets and model geometry
+      tracks['points'] = points
+      data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
+    if len(data) > MAX_BYTES:
+      del record['hkg']['radarTracks']
+      data = json.dumps(record, separators=(',', ':'), allow_nan=False).encode()
   if len(data) > MAX_BYTES:
     # Drop the optional geometry as one unit; never truncate a framed message.
     record = dict(record, hkg={k: v for k, v in record['hkg'].items() if k != 'modelV2'})
@@ -131,6 +140,31 @@ def encode(record):
   return data
 
 
+class VehicleNetwork:
+  def __init__(self):
+    self.next_read = 0.
+    self.value = None
+
+  def address(self, now, device):
+    if str(device.get('networkType')) != 'wifi':
+      self.value = None
+      self.next_read = 0.
+      return None
+    if now >= self.next_read:
+      self.next_read = now + 1.
+      self.value = None
+      try:
+        import socket
+        import fcntl
+        import struct
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+          reply = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', b'wlan0'))
+          self.value = socket.inet_ntoa(reply[20:24])
+      except OSError:
+        pass
+    return self.value
+
+
 def main():
   # Decoding/serialization runs in a separate low-priority process.
   os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
@@ -138,6 +172,7 @@ def main():
   from pathlib import Path
   sm = params = None
   radar = None
+  network = VehicleNetwork()
   status = Path('/dev/shm/sunnypilot-jetlink-model.json')
   from openpilot.selfdrive.modeld.jetlink.hud_radar_trial import apply_trial
   from openpilot.selfdrive.modeld.jetlink.hud_radar_live import LiveRadar
@@ -172,6 +207,10 @@ def main():
       except (OSError, ValueError, KeyError, TypeError):
         pass
       record = snapshot(sm, now, not params.get_bool('IsOffroad'), params.get_bool('IsMetric'), active)
+      record['vehicle_network_address'] = network.address(now, record['hkg'].get('deviceState', {}))
+      tpms = radar.tpms_snapshot(now)
+      if tpms and 'carState' in record['hkg']:
+        record['hkg']['carState']['tpms'] = tpms
       live = radar.snapshot(now, boot_id)
       if live is not None:
         apply_trial(record, now, boot_id, trial=live)

@@ -203,3 +203,32 @@ class SenderTests(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class DeviceForwardTests(unittest.TestCase):
+  def test_device_metrics_and_wifi_reset(self):
+    from openpilot.selfdrive.modeld.jetlink.hud_publisher import VehicleNetwork
+    sm = Sources()
+    sm.values['deviceState'].update(cpuUsagePercent=[10., 30.], cpuTempC=[55., 60.],
+      memoryUsagePercent=40, freeSpacePercent=75., networkType='wifi', networkStrength='good')
+    value = snapshot(sm, 10.05, True, True)['hkg']['deviceState']
+    self.assertEqual(value['cpuUsagePercent'], [10., 30.])
+    self.assertEqual(value['cpuTempC'], [55., 60.])
+    self.assertEqual(value['memoryUsagePercent'], 40)
+    self.assertEqual(value['freeSpacePercent'], 75.)
+    network = VehicleNetwork()
+    network.value, network.next_read = '192.168.1.10', 20.
+    self.assertEqual(network.address(11., value), '192.168.1.10')
+    self.assertIsNone(network.address(11., {'networkType': 'none'}))
+
+  def test_packet_budget_retains_some_nearby_targets(self):
+    sm = Sources()
+    sm.values['radarTracks'] = {'points': [dict(trackId=i, dRel=float(i+1), yRel=3., vRel=1.) for i in range(32)]}
+    record = snapshot(sm, 10.05, True, True)
+    base = dict(record, hkg={k:v for k,v in record['hkg'].items() if k != 'radarTracks'})
+    record['padding'] = 'x' * (hud.MAX_BYTES - len(encode(base)) - 400)
+    decoded = json.loads(encode(record))
+    self.assertIn('modelV2', decoded['hkg'])
+    points = decoded['hkg']['radarTracks']['points']
+    self.assertTrue(0 < len(points) < 32)
+    self.assertEqual(points[0]['dRel'], 1.)

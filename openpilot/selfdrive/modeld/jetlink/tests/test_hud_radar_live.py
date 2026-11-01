@@ -36,3 +36,23 @@ class TestLiveRadar(unittest.TestCase):
     record = dict(hkg={'carState': {'vEgo': 20.}}, age={})
     self.assertFalse(apply_trial(record, 10.3, 'boot', trial=d.snapshot(10.3, 'boot')))
     self.assertNotIn('radarTracks', record['hkg'])
+
+
+class TestTpms(unittest.TestCase):
+  def test_recorded_pressure_and_invalid_sentinels(self):
+    from openpilot.selfdrive.modeld.jetlink.hud_radar_live import decode_tpms
+    raw = bytes.fromhex('6301b700272828290000000000000000')
+    self.assertEqual(decode_tpms(raw), dict(fl=39., fr=40., rl=40., rr=41.))
+    self.assertEqual(decode_tpms(bytes.fromhex('6301b700ffffffff0000000000000000')), {})
+    self.assertEqual(decode_tpms(b''), {})
+    converted = bytearray(raw)
+    converted[8] = 8
+    converted[4:8] = bytes([55]*4)
+    self.assertEqual(decode_tpms(converted)['fl'], 39.875)
+
+  def test_tpms_expires(self):
+    radar = LiveRadar.__new__(LiveRadar)
+    radar.lock = threading.Lock()
+    radar.tpms = (10., {'fl': 39.})
+    self.assertEqual(radar.tpms_snapshot(12.), {'fl': 39.})
+    self.assertIsNone(radar.tpms_snapshot(15.))

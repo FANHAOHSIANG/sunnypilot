@@ -18,7 +18,7 @@ PACKET = Path('/dev/shm/sunnypilot-jetlink-hud.packet')
 HEADER = struct.Struct('<d')
 MAX_BYTES = 14 * 1024
 MAX_AGE = .3
-PERIOD = .2
+PERIOD = .1
 CAPABILITY = 'carrot_hud_v1'
 MESSAGE = 0x4000
 
