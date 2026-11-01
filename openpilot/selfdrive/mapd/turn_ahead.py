@@ -43,7 +43,8 @@ MAJOR = ('motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified'
 # it drew the viaduct ramp's 84 deg right bend with the desire straight). As turns, a right blinker for the exit lane
 # held the lane change back (17:59:45, 46 km/h, OSM had no junction: the wheel pushed right to 306 and nothing).
 NAV_MANEUVERS = ('turn', 'roundabout')
-NAV_STALE_S = 5.0
+NAV_STALE_S = 10.0       # the step's distance: older than the HUD's 'connection lost' (dash.html STALE 10 s) is not used
+NAV_ROUTING_STALE_S = 60.0   # whether a route is on: as long as the HUD shows it (dash.html GONE 60 s)
 FILE_STALE_S = 2.0
 REACH_M = 150.                             # looked this far; desire_helper decides how near counts
 FIX_FRESH_S = 2.0                          # an older GPS fix places us nowhere
@@ -124,12 +125,28 @@ def nav_turn(nav, now):
     if n.get('state') != 'navigating' or step.get('maneuver') not in NAV_MANEUVERS:
       return None
     mod = str(step.get('modifier') or '')
-    side = 'L' if 'left' in mod else ('R' if 'right' in mod else None)
+    # 11/01, the driver: the route says whether a blinker is a turn or a lane change - an exit is a lane change. Only a
+    # real turn counts: a slight one is keeping to a side (the rear LED shows it as 靠左/靠右, as off/on ramps, forks
+    # and merges, which NAV_MANEUVERS already leaves out); a U-turn here is always to the left.
+    if mod.startswith('slight'):
+      return None
+    side = 'L' if ('left' in mod or mod == 'uturn') else ('R' if 'right' in mod else None)
     if side is None:
       return None
     return side, max(0., float(step.get('dist') or 0)), str(step.get('maneuver'))
   except (TypeError, ValueError, AttributeError):
     return None
+
+
+def nav_routing(nav, now):
+  """A route is being followed, the same as the HUD shows it: then a blinker with no turn of the route on that side is
+  a lane change."""
+  try:
+    if nav is None or now - float(nav.get('mono', 0)) > NAV_ROUTING_STALE_S:
+      return False
+    return (nav.get('nav') or {}).get('state') == 'navigating'
+  except (TypeError, ValueError, AttributeError):
+    return False
 
 
 def caption_now(nav, now):

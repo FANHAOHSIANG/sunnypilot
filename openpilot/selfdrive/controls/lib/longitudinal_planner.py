@@ -19,6 +19,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (get_
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.curve_speed import CurveSpeedControl
+from openpilot.selfdrive.controls.lib.turn_slow import TurnSlow
 from openpilot.selfdrive.controls.lib.light_ahead import LightAhead
 from openpilot.selfdrive.controls.lib.road_memory_limit import RoadMemoryLimit
 from openpilot.selfdrive.controls.lib.long_deadzone import LongDeadzone
@@ -481,6 +482,7 @@ class LongitudinalPlanner:
     self.plan_reason = PlanReason.cruise
     self.weak_lead_frames = 0
     self.curve_speed = CurveSpeedControl()
+    self.turn_slow = TurnSlow()
     self.light_ahead = LightAhead()
     self.road_memory = RoadMemoryLimit()
     self.deadzone = LongDeadzone(dt)
@@ -665,6 +667,16 @@ class LongitudinalPlanner:
     if self.curve_speed.is_active:
       curve_limited = self.curve_speed.a_target < self.a_cruise
       self.a_cruise = min(self.a_cruise, self.curve_speed.a_target)
+    # a signalled turn still too fast for the turn desire: down to it before the junction - see turn_slow.
+    # Blinker on only (the driver, 11/01); a fault in it must never cost the plan.
+    try:
+      cs_ = sm['carState']
+      self.turn_slow.update(v_ego, cs_.leftBlinker, cs_.rightBlinker, cs_.gasPressed or long_control_off, cs_.steeringPressed)
+      if self.turn_slow.is_active and self.turn_slow.a_target < self.a_cruise:
+        curve_limited = True
+        self.a_cruise = self.turn_slow.a_target
+    except Exception:
+      self.turn_slow.reset()
 
     # a traffic signal ahead with nothing in front: ease off early - see light_ahead. Off unless its
     # flag file exists; a fault in it must never cost the plan, so it just stands down.

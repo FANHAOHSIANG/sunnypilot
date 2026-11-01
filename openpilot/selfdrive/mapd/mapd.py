@@ -119,7 +119,7 @@ def main():
     nav = turn_ahead.read_nav()
     try:
       turn_ahead.write({"t": now, "osm": osm_ok, "L": left, "R": right, "nav": turn_ahead.nav_turn(nav, now),
-                        "caption": turn_ahead.caption_now(nav, now), "mem": mem})
+                        "routing": turn_ahead.nav_routing(nav, now), "caption": turn_ahead.caption_now(nav, now), "mem": mem})
     except OSError:
       pass
 

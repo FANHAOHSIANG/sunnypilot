@@ -69,6 +69,18 @@ HOLD_NAV_M = 150.
 HOLD_OSM_M = 100.
 HOLD_WATCH_S = 2.0
 HOLD_SLOWING = 1 * CV.KPH_TO_MS
+# 11/01 (the driver: a signalled turn at speed is not slowed for; GPS / route / map may be used with the blinker on):
+# a turn is signalled some seconds before its junction, a lane change caught by a side road has it very near, just
+# passed or far. Taken in the blinker's first MEM_LATCH_S, OSM's junction on that side 4-11 s ahead holds the lane
+# change from the start (turn_slow then slows for it). Blinkers at >= 25 km/h, 21 drives held out (10/12-10/27): turns
+# held 30 of 50 (all 30 at the junction it found), lane changes 11 of 98; the slowing rule below alone on 10/29-10/31:
+# 6 of 23 and 6 of 48. Tools: E:/Temp/d1101/turnfast.
+TT_HOLD_LO = 4.0
+TT_HOLD_HI = 11.0
+TT_HOLD_MAX_SPEED = 60 * CV.KPH_TO_MS
+# 11/01, the driver: "有導航時 導航不是會比較準嗎 至少知道等一下打燈一定是要轉彎". Following a route, the route decides:
+# its turn on that side within HOLD_NAV_M holds the lane change up to TT_HOLD_MAX_SPEED (turn_slow then slows to its
+# distance); with none there the blinker is a lane change, and OSM's junction (either rule) is not asked.
 TURN_SLOW_SPEED = 20 * CV.KPH_TO_MS
 TURN_NEAR_M = 60.
 # 10/28 (the driver: "轉彎門檻可以放寬"): 25 -> 30 km/h. That day's turns taken at 25-35 km/h got the desire 1.2-2.7 s
@@ -122,6 +134,7 @@ class DesireHelper:
     self.mem_off = False
     self.osm_check = 0
     self.blink_mem = None           # 'turn' / 'lane' / None: what the driver did after a blinker here before
+    self.blink_tt = None            # s to OSM's junction on that side, taken in the blinker's first MEM_LATCH_S
 
   def _write_hold(self, side):
     try:
@@ -146,6 +159,7 @@ class DesireHelper:
       self.blink_t, self.blink_v0 = 0.0, v_ego
       self.turn_go, self.turn_hold, self.quiet = None, None, False
       self.blink_mem = None
+      self.blink_tt = None
     self.blink_prev = one_blinker
     wait = False
     if not one_blinker:
@@ -156,12 +170,15 @@ class DesireHelper:
       self.quiet = ta.get('caption') in QUIET_CAPTIONS
       nav = ta.get('nav')
       d_nav = nav[1] if nav and nav[0] == side else None
+      routing = bool(ta.get('routing'))
       osm = bool(ta.get('osm')) and not self.osm_off
       d_osm = ta.get(side) if osm else None
       if self.blink_mem is None and self.blink_t <= MEM_LATCH_S and not self.mem_off:
         m = (ta.get('mem') or {}).get(side)
         self.blink_mem = m if m in ('turn', 'lane') else None
       mem = self.blink_mem
+      if self.blink_tt is None and self.blink_t <= MEM_LATCH_S and d_osm is not None:
+        self.blink_tt = d_osm / max(v_ego, 1.0)
       if self.quiet:
         self.turn_go = None
       elif self.turn_go is None:
@@ -177,6 +194,13 @@ class DesireHelper:
             self.turn_go = 'osm'
         elif LANE_TURN_SPEED_MIN <= v_ego < LANE_TURN_SPEED_MAX:
           self.turn_go = 'speed'           # no OSM to ask: the old rule
+      if self.turn_hold is None and not self.quiet and HOLD_MIN_SPEED <= v_ego < TT_HOLD_MAX_SPEED:
+        if routing:
+          if d_nav is not None and d_nav <= HOLD_NAV_M:
+            self.turn_hold = 'nav'
+        elif (mem != 'lane' and d_osm is not None and self.blink_tt is not None
+              and TT_HOLD_LO <= self.blink_tt <= TT_HOLD_HI):
+          self.turn_hold = 'osm'
       if self.turn_hold is None and not self.quiet and HOLD_MIN_SPEED <= v_ego < HOLD_MAX_SPEED:
         if d_nav is not None and d_nav <= HOLD_NAV_M:
           self.turn_hold = 'nav'
@@ -184,7 +208,7 @@ class DesireHelper:
           self.turn_hold = 'mem'
         elif mem == 'lane':
           pass
-        elif d_osm is not None and d_osm <= HOLD_OSM_M:
+        elif not routing and d_osm is not None and d_osm <= HOLD_OSM_M:
           if self.blink_t < HOLD_WATCH_S:
             wait = True
           elif self.blink_t < HOLD_WATCH_S + 2 * DT_MDL and self.blink_v0 - v_ego >= HOLD_SLOWING:
