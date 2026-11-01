@@ -52,6 +52,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL_DET = os.environ.get('C3_DET', os.path.join(HERE, 'models/c3light_ft1n_704x1248_raw.onnx'))
 MODEL_GPU = os.environ.get('C3_GPU', os.path.join(HERE, 'models/c3light_ft1n_704x1248_raw_qcom.pkl'))
 MODEL_CLS = os.environ.get('C3_CLS', os.path.join(HERE, 'models/lightcls_64.onnx'))
+# Per head (2026-11-01): which lamps of the head are lit - and whether it is a vehicle signal at all - from the arrow
+# model trained on .70 (c3arrow: C4 and C3 heads labelled by two models). tlwatchd takes the red from the biggest
+# vehicle head(s) in front; against the picture's truth on 10/29's 104 judged moments that left reds on green lights
+# 39 -> 6 with no more greens read on a red (2 -> 1). Without the file nothing changes.
+MODEL_LAMP = os.environ.get('C3_LAMP', os.path.join(HERE, 'models/lampcls_96.onnx'))
+LAMP_OUTS = ['vehicle', 'pedestrian', 'red', 'yellow', 'green', 'left', 'straight', 'right', 'countdown']
+LAMP_MEAN, LAMP_STD = np.array([0.485, 0.456, 0.406], np.float32), np.array([0.229, 0.224, 0.225], np.float32)
 THREADS = int(os.environ.get('C3_THREADS', '4'))
 ALWAYS = os.environ.get('C3_ALWAYS', '0') == '1'      # testing: run whether or not the car is driving
 OUT_DIR = '/dev/shm/c3det'
@@ -177,6 +184,38 @@ def colours(cls, frame, boxes):
   return [cls.run(None, {name: x[None]})[0][0] for x in xs]   # the export has a fixed batch of 1
 
 
+def lamp_session():
+  try:
+    return session(MODEL_LAMP) if os.path.exists(MODEL_LAMP) else None
+  except Exception:
+    return None
+
+
+def lamps(sess, frame, boxes):
+  """The arrow model on each box: the c3arrow training crop (box padded 25% of its longer side + 3 px, longer side to
+  144, LANCZOS), letterboxed to 96 on black, ImageNet normalised -> [{lamp: p}] or None."""
+  if sess is None or not boxes:
+    return None
+  img = Image.fromarray(frame)
+  name = sess.get_inputs()[0].name
+  out = []
+  for x1, y1, x2, y2 in boxes:
+    pad = 0.25 * max(x2 - x1, y2 - y1) + 3
+    c = img.crop((int(x1 - pad), int(y1 - pad), int(x2 + pad), int(y2 + pad)))   # outside the frame comes in black, as trained
+    s = 144 / max(c.size)
+    c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.LANCZOS)
+    s = 96 / max(c.size)
+    c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.BILINEAR)
+    lb = Image.new('RGB', (96, 96), (0, 0, 0))
+    lb.paste(c, ((96 - c.size[0]) // 2, (96 - c.size[1]) // 2))
+    x = ((np.asarray(lb, np.float32) / 255. - LAMP_MEAN) / LAMP_STD).transpose(2, 0, 1)[None].astype(np.float32)
+    y = sess.run(None, {name: x})[0][0]
+    if y.min() < 0 or y.max() > 1:
+      y = 1. / (1. + np.exp(-y))
+    out.append({k: round(float(v), 3) for k, v in zip(LAMP_OUTS, y, strict=True)})
+  return out
+
+
 class YellowGate:
   """Where a green (or a yellow let through) was read lately, to let a yellow through at the same head (YELLOW_*)."""
   def __init__(self):
@@ -196,11 +235,12 @@ class YellowGate:
                 [(now, (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1) for x1, y1, x2, y2 in boxes]
 
 
-def dets_from(boxes, scores, probs, gate=None, now=0.):
+def dets_from(boxes, scores, probs, gate=None, now=0., lamp=None):
   """Full-res boxes, finder scores and colour probabilities -> det.json entries (half-res), dropped count.
-  gate (YellowGate, live only): a yellow passes where a light turned yellow; without it no yellow, as before."""
+  gate (YellowGate, live only): a yellow passes where a light turned yellow; without it no yellow, as before.
+  lamp (lamps()): the arrow model's read of each box, passed on as 'lamp'."""
   dets, dropped, keep = [], 0, []
-  for (x1, y1, x2, y2), score, p in zip(boxes, scores, probs, strict=True):
+  for i, ((x1, y1, x2, y2), score, p) in enumerate(zip(boxes, scores, probs, strict=True)):
     k = int(np.argmax(p))
     name, pc = CLS_NAMES[k], float(p[k])
     if name == 'yellow' and pc >= COLOR_MIN and gate is not None and gate.turned((x1, y1, x2, y2), now):
@@ -214,12 +254,14 @@ def dets_from(boxes, scores, probs, gate=None, now=0.):
       keep.append((x1, y1, x2, y2))
     dets.append({'x': round(x1 / 2, 1), 'y': round(y1 / 2, 1), 'w': round((x2 - x1) / 2, 1), 'h': round((y2 - y1) / 2, 1),
                  'cls': c, 'zh': ZH[c], 'conf': round(pc, 3), 'det': round(score, 3)})
+    if lamp is not None:
+      dets[-1]['lamp'] = lamp[i]
   if gate is not None:
     gate.note(keep, now)
   return dets, dropped
 
 
-def read(det, cls, frame, row0, col0):
+def read(det, cls, frame, row0, col0, lamp_sess=None):
   """Full-res RGB frame -> det.json boxes (half-res) and counts."""
   band = np.ascontiguousarray(frame[row0:row0 + BAND_H, col0:col0 + BAND_W])
   t0 = time.perf_counter()
@@ -228,8 +270,11 @@ def read(det, cls, frame, row0, col0):
   boxes = [(x1 + col0, y1 + row0, x2 + col0, y2 + row0) for x1, y1, x2, y2, _ in found]
   probs = colours(cls, frame, boxes)
   t2 = time.perf_counter()
-  dets, dropped = dets_from(boxes, [f[4] for f in found], probs)
-  return dets, {'found': len(found), 'dropped': dropped, 'det_ms': round((t1 - t0) * 1000), 'cls_ms': round((t2 - t1) * 1000)}
+  lp = lamps(lamp_sess, frame, boxes)
+  t3 = time.perf_counter()
+  dets, dropped = dets_from(boxes, [f[4] for f in found], probs, lamp=lp)
+  return dets, {'found': len(found), 'dropped': dropped, 'det_ms': round((t1 - t0) * 1000), 'cls_ms': round((t2 - t1) * 1000),
+                'lamp_ms': round((t3 - t2) * 1000)}
 
 
 class Reader:
@@ -237,6 +282,7 @@ class Reader:
   those lights only, off their own rows. rows(r0, r1) -> (full-width RGB of rows r0.., first row actually given)."""
   def __init__(self, det, cls):
     self.det, self.cls = det, cls
+    self.lamp = lamp_session()
     self.boxes, self.scores, self.t_find = [], [], -1e9
     self.n_shown = 0
     self.gate = YellowGate()   # a yellow only where a light turned yellow (YELLOW_*)
@@ -252,8 +298,9 @@ class Reader:
       top = int(max(0, min(y1 - (y2 - y1) * TRACK_PAD for _, y1, _, y2 in self.boxes)))
       bot = int(min(FULL_H, max(y2 + (y2 - y1) * TRACK_PAD for _, y1, _, y2 in self.boxes) + 2))
       rgb, r0 = rows(top, bot)
-      probs = colours(self.cls, rgb, [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes])
-      dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now)
+      local = [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes]
+      probs = colours(self.cls, rgb, local)
+      dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lamps(self.lamp, rgb, local))
       self.went_dark = not dets and self.n_shown > 0     # every tracked light dark: whatever is lit now is elsewhere
       return dets, {'mode': 'track', 'found': len(self.boxes), 'dropped': dropped, 'det_ms': 0,
                     'cls_ms': round((time.perf_counter() - t0) * 1000)}
@@ -263,8 +310,9 @@ class Reader:
     t1 = time.perf_counter()
     self.boxes = [(x1 + col0, y1 + row0, x2 + col0, y2 + row0) for x1, y1, x2, y2, _ in found]
     self.scores, self.t_find = [f[4] for f in found], now
-    probs = colours(self.cls, rgb, [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes])
-    dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now)
+    local = [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes]
+    probs = colours(self.cls, rgb, local)
+    dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lamps(self.lamp, rgb, local))
     self.n_shown, self.went_dark = len(dets), False
     return dets, {'mode': 'find', 'found': len(found), 'dropped': dropped, 'det_ms': round((t1 - t0) * 1000),
                   'cls_ms': round((time.perf_counter() - t1) * 1000)}
@@ -327,9 +375,11 @@ def offline(fdir, out_path):
   row0 = int(os.environ.get('ROW0', ROW0_DEFAULT))
   col0 = int(os.environ.get('COL0', band_col0(None)))
   res = {}
+  lamp_sess = lamp_session()
+  print('lamp', MODEL_LAMP if lamp_sess is not None else 'none', flush=True)
   for f in sorted(glob.glob(os.path.join(fdir, '*.jpg'))):
     frame = np.asarray(Image.open(f).convert('RGB'))
-    dets, st = read(det, cls, frame, row0, col0)
+    dets, st = read(det, cls, frame, row0, col0, lamp_sess)
     res[os.path.basename(f)] = {'dets': dets, **st}
   json.dump(res, open(out_path, 'w'), ensure_ascii=False)
   ms = [v['det_ms'] + v['cls_ms'] for v in res.values()]
@@ -340,7 +390,7 @@ def main():
   from msgq.visionipc import VisionIpcClient, VisionStreamType
   os.makedirs(OUT_DIR, exist_ok=True)
   (det, label), cls = finder(), session(MODEL_CLS)
-  label += ' + ' + os.path.basename(MODEL_CLS)
+  label += ' + ' + os.path.basename(MODEL_CLS) + (' + ' + os.path.basename(MODEL_LAMP) if os.path.exists(MODEL_LAMP) else '')
   client = VisionIpcClient('camerad', VisionStreamType.VISION_STREAM_ROAD, False)
   state = {'model': label, 'dets': [], 'n': 0, 'err': 'starting', 'idle': True, 'w': DISP_W, 'h': DISP_H}
   write(state)

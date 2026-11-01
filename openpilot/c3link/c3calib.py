@@ -291,6 +291,8 @@ def light_dirs(det, car_from_dev):
       continue
     out.append({"zh": d.get("zh", d.get("cls")), "cls": d.get("cls"), "conf": d.get("conf"),
                 "az": round(az, 1), "el": round(el, 1), "h": d.get("h")})
+    if d.get("lamp") is not None:       # the arrow model's read of the head (c3lights MODEL_LAMP, 11/01)
+      out[-1]["lamp"] = d["lamp"]
   return out, below
 
 

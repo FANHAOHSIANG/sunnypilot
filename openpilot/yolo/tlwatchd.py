@@ -85,6 +85,7 @@ C3_GO = BASE / 'C3_GO'          # GO on C3's call is pressed only with this too 
 C3_FILE = '/dev/shm/c3lights.json'
 C3_FRESH_S = 1.5                # c3_relay rewrites it twice a second while C3 sends
 C3_AZ_DEG = 12.0                # the HUD's "in front" for C3's lights
+LAMP_VEHICLE_P = 0.5            # the arrow model's 'vehicle' at which a head counts as a vehicle signal (c3_read)
 # ...and at the height a signal head has at the OSM signal's distance (2026-10-30). On 10/29 C3 called red at 60 m
 # or closer on 65 signals the car then drove through without the driver braking; replayed from C3's recordings
 # (E:/Temp/d1030/c3replay.py) most of the reds picked were real lamps of another lane or direction, but tail lights
@@ -281,6 +282,19 @@ def c3_read(now, osm_m=None):
   yellow = max([float(lt.get('conf', 0)) for lt in front if lt.get('cls') == 'light_yellow'], default=0.)
   if red > 0 or yellow > 0:
     go = 0.
+  # The red from the arrow model on the biggest vehicle head(s) in front (2026-11-01, see c3lights MODEL_LAMP) - any red
+  # in the window was what called red before, and on 10/29's 104 moments judged from the picture that called red on 39
+  # of 69 green lights (other roads' heads, pedestrian signals, the next junction); the biggest vehicle head's own red
+  # 6, the reds it called right the same (26 of 35). The go stays as it was - a green ball with no red or yellow
+  # anywhere in the window - so nothing is let go that was not before (greens read on a red: 2 -> 1). Without lamp
+  # reads (an older C3) nothing changes.
+  veh = [lt for lt in front if isinstance(lt.get('lamp'), dict) and float(lt['lamp'].get('vehicle', 0)) >= LAMP_VEHICLE_P]
+  if veh:
+    big = max(float(lt.get('h') or 0) for lt in veh)
+    red = max(max(float(lt['lamp'].get('red', 0)), float(lt['lamp'].get('yellow', 0)))
+              for lt in veh if float(lt.get('h') or 0) >= big)
+  elif any(isinstance(lt.get('lamp'), dict) for lt in front):
+    red = 0.                     # every head read is not a vehicle signal (a pedestrian head, a sign)
   return [round(1. - max(red, go, yellow), 3), round(red, 3), round(go, 3), round(yellow, 3)]
 
 
