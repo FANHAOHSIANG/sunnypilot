@@ -66,3 +66,25 @@ Source tests:
 python3 tools/fca_research/test_fca_scc_timeline.py
 python3 tools/fca_research/test_compare_fca_timelines.py
 ```
+
+## Mac mini M4: verify actual Hyundai CAN FD DBC layouts
+
+The user's carrot-wip source checkout is `~/CarrotMacHUD/fca-research/carrot-wip` at `03a28b2`. Keep all testing **separate from** `~/CarrotMacHUD/jetlink` and the running HUD.
+
+```bash
+mkdir -p "$HOME/CarrotMacHUD/fca-research"
+git clone --depth 1 --branch hkg-fca-aeb-preservation-lab \
+  https://github.com/FANHAOHSIANG/sunnypilot.git \
+  "$HOME/CarrotMacHUD/fca-research/sunnypilot-lab"
+cd "$HOME/CarrotMacHUD/fca-research/sunnypilot-lab"
+git submodule update --init opendbc_repo panda
+python3 tools/fca_research/test_compare_canfd_dbc.py
+python3 tools/fca_research/compare_canfd_dbc.py \
+  --carrot "$HOME/CarrotMacHUD/fca-research/carrot-wip/opendbc_repo/opendbc/dbc/hyundai_canfd_generated.dbc" \
+  --sunnypilot "$PWD/opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd.dbc" \
+  --output "$HOME/CarrotMacHUD/fca-research/canfd_dbc_diff.json"
+```
+
+If the lab folder already exists, do not clone over it: use `git -C ... pull --ff-only` after verifying the branch and clean worktree. The script compares DBC **definitions**, not real vehicle firmware. Differences in StopReq, FCA/TCS fields and SCC status prohibit direct copying of raw SCC2/TCS frames. Do not change any OEM warnings or Panda Safety checks as a workaround.
+
+Note: as of this document, GitHub Actions results for this new workflow have not been verified; run the synthetic tests locally before relying on output.
