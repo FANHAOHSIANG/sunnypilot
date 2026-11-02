@@ -54,6 +54,10 @@ BEND_RATE = 0.15         # m/s
 BEND_SPEED_MIN = 15 / 3.6
 BEND_TAU = 0.5           # s, smoothing the model's curvature (it flickers frame to frame)
 BEND_RELOAD_S = 60.      # s between reads of the learned table
+# 11/02: no bend part below this |desiredCurvature| (R 250 m). The table ran from 0 at 0, so the model's small curvature
+# on a straight road gave a few cm and the HUD said "彎道補償" there: on 11/02, 55% of the time it showed was at
+# R > 333 m, a median 0.04-0.07 m. From here it ramps to the table's next band (0.006 = R 167 m).
+BEND_K_MIN = 0.004
 BEND_FLAG_OFF = '/data/bend_offset_off'
 
 
@@ -77,10 +81,10 @@ class LaneOffset:
   def _load_bend(self):
     """The learned table: desiredCurvature band centre -> how far the model sits off centre there (+ = left)."""
     p = compensation.load()
-    k, o = [0.], [0.]
+    k, o = [-BEND_K_MIN, 0., BEND_K_MIN], [0., 0., 0.]
     if p and p.get('bend_offset'):
       for kc, oc in zip(p['bend_k'], p['bend_offset'], strict=True):
-        if oc is not None and abs(kc) > 1e-4:
+        if oc is not None and abs(kc) > BEND_K_MIN:
           k.append(kc)
           o.append(oc)
     order = np.argsort(k)
