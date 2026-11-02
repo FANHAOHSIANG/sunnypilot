@@ -90,3 +90,13 @@ At this exact commit:
 - User's previously captured sunnypilot CarParams `flags=134227976` set `CANFD_CAMERA_SCC` but **not** `CAMERA_SCC`. Whether carrot's runtime sets additional flags on the same vehicle is not established.
 
 **Decision:** do not blindly transplant `create_acc_control_scc2`, `create_tcs_messages`, `canfd_toggle_adas`, or Panda TX/RX rules into the target. First map exact DBC signal layouts, ECU arbitration, and RX/TX safety semantics in isolated simulation. No AEB operational claim or C4 deployment authorization.
+
+## Function-body inspection from Mac mini (2026-11-03)
+
+At carrot-wip commit 03a28b2:
+- `create_acc_control_scc2()` first requires `CS.scc_control`, copies the received stock SCC_CONTROL fields, then overrides `ACCMode`, `aReqValue`, `aReqRaw`, `StopReq`, `MainMode_ACC`, `DriverAlert=0`, `SysFailState=0`, `TakeOverReq=0`, and other fields before packing a new outgoing `SCC_CONTROL`. **This is not a proven AEB preservation mechanism**; overriding OEM failure/takeover fields could conceal valid OEM states and must not be ported blindly.
+- `create_tcs_messages()` copies `CS.tcs`, changes `DriverBraking`, `DriverBrakingLowSens`, and other TCS fields, and sends on camera bus. This changes safety-related brake reporting; do not transplant without comprehensive bench tests and review.
+- `canfd_toggle_adas()` adjusts internal `MainMode_ACC_trigger` and `LFA_trigger` counters based on brake hold, parking brake, cruise and LFA states. The shown function does **not** directly disable or enable an ECU; its effects are through downstream button/message logic.
+- `safety_hyundai_canfd.h` explicitly calls `generic_rx_checks(stock_ecu_detected)` on selected stock steering and SCC frames and checks longitudinal acceleration limits. Safety mode and forwarding are substantially different from target sunnypilot.
+
+**Safety disposition:** these function bodies do not establish that carrot-wip preserves physical AEB actuation. Do not port TCS brake-state rewrites, suppress OEM failure/takeover fields, or relax Panda stock ECU checks. Next work is an offline signal mapping of received SCC_CONTROL fields and corresponding DBC layouts; only then bench tests and qualified closed-course validation.
