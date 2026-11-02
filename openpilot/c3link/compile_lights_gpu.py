@@ -27,8 +27,12 @@ t0 = time.perf_counter()
 run_onnx = OnnxRunner(onnx_file)
 name, spec = next(iter(run_onnx.graph_inputs.items()))
 print('input', name, spec.shape, 'device', Device.DEFAULT, flush=True)
-jit = TinyJit(lambda **kw: next(iter(run_onnx({k: v.to(Device.DEFAULT) for k, v in kw.items()}).values())).cast('float32'),
-              prune=True)
+# .contiguous(): the graph ends in a transpose, and without it the jit hands back a VIEW over its buffer, so every
+# .numpy() scheduled a fresh transpose kernel outside the jit - which on 11/02 (18:40, 18:54, each 13-14 min after
+# start) came out as STORE and LOAD on the same buffer, "LINEARIZE FAILURE: self operand of augmented assign must be
+# contiguous", and c3-lights died. With it the transpose is one of the jit's own kernels and .numpy() only copies.
+jit = TinyJit(lambda **kw: next(iter(run_onnx({k: v.to(Device.DEFAULT) for k, v in kw.items()}).values())).cast('float32')
+              .contiguous(), prune=True)
 rng = np.random.default_rng(0)
 buf = rng.random(spec.shape, dtype=np.float32)
 x = Tensor(buf, device='NPY').realize()       # wraps buf: writing into buf changes the next run's input
