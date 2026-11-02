@@ -63,3 +63,26 @@ Observed: `Ran 4 tests in 0.513s; OK`.
 Previously user ran upstream `opendbc.safety.tests.test_hyundai_canfd`: `Ran 3835 tests in 26.150s; OK (skipped=276)`. This is **not** 3835 tests of exact 1037, and the four new smoke tests are **not** proof of OEM AEB operation.
 
 **Remaining blockers:** compare OEM ECU status/DTC under stock and Alpha, identify the source and meaning of 0x160 AEB_SETTING and OEM FCA availability states with variant-correct DBC, verify stock ECU conflicts and bus forwarding under actual 1037 in a broader test matrix, and perform independent closed-course AEB/FCW validation. Keep research branch non-deployable; no warning masking, safety hook relaxation, or ECU disable changes.
+
+## 2026-11-03: 0x160 AEB_SETTING raw signal audit (no control changes)
+
+The pinned carrot-wip and sunnypilot DBCs both define `ADRV_0x160.AEB_SETTING` at `24|2@1+`. User-provided route `0000004f` segment 0 CAN inventory included:
+- openpilot `sendcan` bus 0 example `2d84000100000002fffc090000000000`: raw AEB_SETTING = **1**.
+- `can` bus 2 example `41bab00300000002fffc010000000000`: raw AEB_SETTING = **3**.
+These two frames are not time-aligned, and bus provenance / OEM enum meanings are unverified. They **cannot** establish AEB functionality or explain the yellow warning alone.
+
+`tools/fca_research/aeb_setting_audit.py` now tallies 0x160 raw values by direction, bus, and second across archived RLOG segments, with no CAN output or controller modification. Its companion `test_aeb_setting_audit.py` tests the bitfield and RX/TX separation using synthetic examples. Both are committed, but the new tests and actual multi-segment audit are **not yet reported as run**.
+
+On Mac mini, in the isolated `sunnypilot-lab`:
+```bash
+cd ~/CarrotMacHUD/fca-research/sunnypilot-lab
+git pull --ff-only
+python3 tools/fca_research/test_aeb_setting_audit.py
+```
+For RLOG decoding use an environment with the pinned `openpilot.tools.lib.logreader` and its dependencies (e.g. the existing C4 environment, parked, analyzing local archived files only):
+```bash
+PYTHONPATH=/data/openpilot:/data/openpilot/opendbc_repo python3 /tmp/aeb_setting_audit.py \
+  /data/media/0/realdata/0000004f--858ff9d82b--0/rlog.zst \
+  --output /tmp/ioniq5_aeb_setting.json
+```
+Fetch the audited script from the branch to `/tmp/aeb_setting_audit.py` before this invocation. Do not deploy any experimental controls, suppress warnings, or induce collision warnings on public roads.
