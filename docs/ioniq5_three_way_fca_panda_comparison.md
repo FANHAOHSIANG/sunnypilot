@@ -100,3 +100,15 @@ At carrot-wip commit 03a28b2:
 - `safety_hyundai_canfd.h` explicitly calls `generic_rx_checks(stock_ecu_detected)` on selected stock steering and SCC frames and checks longitudinal acceleration limits. Safety mode and forwarding are substantially different from target sunnypilot.
 
 **Safety disposition:** these function bodies do not establish that carrot-wip preserves physical AEB actuation. Do not port TCS brake-state rewrites, suppress OEM failure/takeover fields, or relax Panda stock ECU checks. Next work is an offline signal mapping of received SCC_CONTROL fields and corresponding DBC layouts; only then bench tests and qualified closed-course validation.
+
+## Actual DBC signal-level comparison (2026-11-03)
+
+Compared `ajouatom/openpilot@03a28b2` vendored `opendbc_repo/opendbc/dbc/hyundai_canfd_generated.dbc` against `TonyBinheWu/opendbc@1c5173178` `opendbc/dbc/generator/hyundai/hyundai_canfd.dbc`. The latter is a source DBC; ensure build-time generation and actual vehicle variant selection before any runtime conclusions.
+
+- `ADRV_0x160 (0x160)`: carrot 14 signals, sunnypilot 7; `AEB_SETTING` shares the same bit layout `24|2@1+`. The extra carrot entries are mostly `NEW_SIGNAL_*` definitions; **do not interpret these as AEB functionality**.
+- `TCS (0x175)`: carrot 38 signals, sunnypilot 18; `DriverBraking` shares `81|1@0+`, `DriverBrakingLowSens` shares `84|1@1+`, but several unnamed fields differ in bit position. Carrot has `FCA_EquipSta` `96|2@1+` and `FCA_AvlblSta` `98|2@1+`, while target calls a bit at 96 `AEB_EQUIP_MAYBE`. **No brake/TCS frame copying is safe without validated variant-specific DBC.**
+- `SCC_CONTROL (0x1A0)`: carrot 30 signals, sunnypilot 35. `StopReq` differs (`185|2@0+` vs `184|1@0+`); `DISTANCE_SETTING` differs (`88|4@1+` vs `88|3@1+`); `ACC_ObjRelSpd` differs in bit length and offset; `SysFailState`, `TakeOverReq`, `DriverAlert` appear in carrot but not the pinned sunnypilot source DBC. This is **a major blocker** to porting SCC2 frame rewriting.
+
+A new read-only DBC comparison tool `tools/fca_research/compare_canfd_dbc.py` and synthetic regression were committed. These differences do not by themselves prove that either DBC is correct for the user's 2023 Ioniq 5 or that physical AEB is preserved.
+
+**Decision: NOT APPROVED for live longitudinal/AEB coexistence.** Continue variant identification, CAN parser replay, and Panda safety regression with original safety limits unchanged.
