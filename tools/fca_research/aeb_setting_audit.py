@@ -74,7 +74,13 @@ def main():
     p.add_argument("logs", type=Path, nargs="+")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
-    from openpilot.tools.lib.logreader import LogReader
+    for path in args.logs:
+        if not path.is_file():
+            p.error(f"Missing local RLOG: {path}. This is a local file path, not a comma Connect URL. C4 uses /data/media/0/realdata; Mac mini does not have /data/openpilot.")
+    try:
+        from openpilot.tools.lib.logreader import LogReader
+    except ImportError as exc:
+        p.error(f"openpilot LogReader unavailable: {exc}. Run within a compatible openpilot Python environment (e.g. C4 over SSH), or configure Mac PYTHONPATH to an existing openpilot checkout with all dependencies installed.")
     result = {
         "type": "read_only_aeb_setting_bitfield_audit",
         "signal_definition": "ADRV_0x160 AEB_SETTING 24|2@1+",
@@ -82,8 +88,6 @@ def main():
         "segments": [],
     }
     for path in args.logs:
-        if not path.is_file():
-            p.error(f"Missing local RLOG: {path}")
         item = summarize(LogReader(str(path)), path.name)
         result["segments"].append(item)
         tx = sum(x["frames"] for x in item["aeb_setting"] if x["direction"] == "sendcan")
