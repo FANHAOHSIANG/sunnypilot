@@ -43,3 +43,23 @@ PYTHONPATH="$PWD" python ../tools/fca_research/test_ioniq5_safety_1037.py
 It checks exact safety flag composition and rejection of invalid acceleration, forged TCS and wrong-bus ADAS diagnostic frames. This test has **not yet been run** on the user's Mac and must not be called passing until output is received. Do not loosen assertions or Panda checks merely to make it pass. Failure should be investigated.
 
 **Deployment status: BLOCKED.** No control logic or Panda firmware has been modified. FCA/AEB operation still requires OEM DTC and ECU state evidence, appropriate bench simulation and professional closed-course verification.
+
+## User-run Mac mini verification: exact 1037 test PASS (2026-11-03)
+
+Environment: separate `.venv-fca` in `~/CarrotMacHUD/fca-research/sunnypilot-lab`, pinned `opendbc_repo` 1c51731784729da5ebaf24b3c34106bd27aaf94b, pinned `panda` 4230530f5ec4c7f11971f868ae9930b3547346eb.
+
+User ran:
+```bash
+cd ~/CarrotMacHUD/fca-research/sunnypilot-lab/opendbc_repo
+PYTHONPATH="$PWD" python ../tools/fca_research/test_ioniq5_safety_1037.py
+```
+
+Observed: `Ran 4 tests in 0.513s; OK`.
+- Exact EV_GAS | LONG | CAMERA_SCC | CANFD_DYNAMIC_TORQUE flags = 1037.
+- Out-of-range longitudinal requests rejected by compiled C safety hook.
+- Unwhitelisted TCS transmission rejected.
+- Wrong-bus ADAS UDS transmission rejected.
+
+Previously user ran upstream `opendbc.safety.tests.test_hyundai_canfd`: `Ran 3835 tests in 26.150s; OK (skipped=276)`. This is **not** 3835 tests of exact 1037, and the four new smoke tests are **not** proof of OEM AEB operation.
+
+**Remaining blockers:** compare OEM ECU status/DTC under stock and Alpha, identify the source and meaning of 0x160 AEB_SETTING and OEM FCA availability states with variant-correct DBC, verify stock ECU conflicts and bus forwarding under actual 1037 in a broader test matrix, and perform independent closed-course AEB/FCW validation. Keep research branch non-deployable; no warning masking, safety hook relaxation, or ECU disable changes.
