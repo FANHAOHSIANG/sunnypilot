@@ -77,3 +77,16 @@ Pinned target `carcontroller.py` invokes `create_fca_warning_light` on CAN FD no
 Crucial: carrot-wip's `create_fca_warning_light(CP,...)` skips only `HyundaiFlags.CAMERA_SCC`; the user's flag is `CANFD_CAMERA_SCC`, which is **not identical**. Simply transplanting this condition would not avoid the output in this specific configuration. No OEM AEB claim is warranted.
 
 **Next safe verification:** timestamp-aligned passive review of OEM FCA/DTC status and both RX/TX 0x160, then qualified bench/closed-course confirmation of AEB. Do not remove or suppress warning messages solely to clear the lamp. This document contains no control-plane edits.
+
+## Carrot-wip 2026-11-02 source snapshot verified on Mac mini
+
+User's independent Mac checkout `~/CarrotMacHUD/fca-research/carrot-wip` is at `ajouatom/openpilot` commit `03a28b256cc46edf551eda5b3fc9b90d0a01ea14` (2026-11-02). The `opendbc_repo` directory is **vendored**, not a git submodule: no root `.gitmodules` is present; `git -C opendbc_repo rev-parse HEAD` returns the parent repository's SHA.
+
+At this exact commit:
+- `opendbc_repo/opendbc/car/hyundai/carcontroller.py` uses `camera_scc = CP.flags & HyundaiFlags.CAMERA_SCC`; it has `canfd_toggle_adas()` at ~line 753 and selects `create_acc_control_scc2()` for this *distinct* flag.
+- `opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py` defines `create_acc_control_scc2` at ~494, `create_fca_warning_light` at ~645, `create_tcs_messages` at ~662. The FCA helper checks `CAMERA_SCC`, not `CANFD_CAMERA_SCC`, and still includes `AEB_SETTING=1`.
+- `opendbc_repo/opendbc/car/hyundai/interface.py` still excludes `CANFD_CAMERA_SCC` from the SCC `disable_ecu()` condition.
+- **Panda Safety source path differs**: carrot uses `opendbc_repo/opendbc/safety/safety/safety_hyundai_canfd.h` (not sunnypilot's `.../safety/modes/hyundai_canfd.h`). Carrot's source contains explicit stock ECU detection at ~580-587, longitudinal acceleration checks ~692-693, and camera-SCC forwarding/receive configurations at ~849-901. This is substantial safety architecture divergence, not a drop-in patch.
+- User's previously captured sunnypilot CarParams `flags=134227976` set `CANFD_CAMERA_SCC` but **not** `CAMERA_SCC`. Whether carrot's runtime sets additional flags on the same vehicle is not established.
+
+**Decision:** do not blindly transplant `create_acc_control_scc2`, `create_tcs_messages`, `canfd_toggle_adas`, or Panda TX/RX rules into the target. First map exact DBC signal layouts, ECU arbitration, and RX/TX safety semantics in isolated simulation. No AEB operational claim or C4 deployment authorization.
