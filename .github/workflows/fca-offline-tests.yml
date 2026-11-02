@@ -20,3 +20,5 @@ jobs:
         run: python -m compileall -q tools/fca_research
       - name: Synthetic CAN timeline regression
         run: python tools/fca_research/test_fca_scc_timeline.py
+      - name: Synthetic carrot/sunnypilot comparison regression
+        run: python tools/fca_research/test_compare_fca_timelines.py
