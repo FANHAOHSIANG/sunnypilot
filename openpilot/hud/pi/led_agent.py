@@ -32,8 +32,11 @@ STREAM_PORT = 8902
 FPS = 6.0                 # 控制卡整張重建約 155 ms，6 格／秒剛好
 STREAM_STALE = 3.0        # 秒沒收到串流就當作斷線，畫面回日期時間
 CARD_RETRY = 5.0          # 控制卡推失敗後多久再試
-SLOW_LIMIT = 3            # 連續這麼多張逾時才算斷線（偶爾一張慢只跳過）
 CARD_TIMEOUT = 1.5
+# 11/02：原本每格都推（6 張／秒，畫面沒變也推），卡偶爾一張超過 CARD_TIMEOUT，連 3 張就判斷線重登 ——
+# 那時 WiFi 一直連著（Archer 閒置 ping 9 ms、0 丟包、0 beacon loss），斷線是這裡判的。改成：
+KEEPALIVE = 5.0           # 畫面沒變就不推，最多隔這麼久補推一次（實測卡沒收到新圖 12 s 畫面照樣留著）
+CARD_DOWN_AFTER = 15.0    # 回得慢但卡還連得上（TCP 80 通）就繼續等，這麼久都沒推成功一張才算斷線重登
 LOG = os.path.expanduser("~/hud/led.log")
 # HUD 上看得到後窗 LED 正在顯示什麼（駕駛在車裡看不到後窗）：每幾格把同一張圖寫到 RAM，
 # hud_agent 的 :8080 從 ~/hud 供應靜態檔，那裡放兩個 symlink 指過來，dash.html 同源就讀得到。
@@ -173,6 +176,15 @@ def nav_poll(director, now):
   except (OSError, ValueError, KeyError, TypeError):
     nav, age = None, None
   director.nav_update(nav, age, now)
+
+
+def _reachable(led) -> bool:
+  """After a frame timed out: is the card still there (a quick probe), i.e. was it only a late reply?"""
+  try:
+    led.probe()
+    return True
+  except Exception:
+    return False
 
 
 def relay_diag(led):
@@ -400,7 +412,8 @@ def main():
   card_state = {"ok": None}                        # for card_wifi_watch, which runs in its own thread
   if led is not None and not args.card.startswith("serial"):
     threading.Thread(target=card_wifi_watch, args=(lambda: card_state["ok"] is not True,), daemon=True).start()
-  slow = 0                                         # 連續逾時的張數（見 SLOW_LIMIT）
+  sent_pix, sent_t = None, 0.0                     # 上次推成功的那張圖（像素）和時間（見 KEEPALIVE）
+  slow_since = None                                # 從什麼時候開始回得慢（見 CARD_DOWN_AFTER）
   last_key, last_text = None, ""
   mirror_next = 0.0
   power_next, power_last = 0.0, None   # Pi supply: logged whenever vcgencmd's flags change
@@ -439,28 +452,34 @@ def main():
       left = director.manual_left(tick)
       mirror(img, screen.key, text, card_ok, left, director.manual if left is not None else None)
 
-    if led is not None and tick >= card_next:
+    pix = img.tobytes() if led is not None else b""
+    if led is not None and tick >= card_next and (card_ok is not True or pix != sent_pix or tick - sent_t >= KEEPALIVE):
       try:
         if card_ok is not True:                    # 斷線中：先快速探一下，別讓主迴圈卡 1.5 秒逾時
           led.probe()
         led.show(img)
         if card_ok is not True:
           say(f"card up {args.card}")
-        card_ok, slow = True, 0
+        elif slow_since is not None:
+          say(f"card answering again after {tick - slow_since:.1f} s slow")
+        card_ok, sent_pix, sent_t, slow_since = True, pix, tick, None
       except Exception as e:
         # 一張圖回得慢不算斷線：10/12 斷線後問中繼，讀到的是控制卡遲到的回覆 —— 卡和中繼都活著，
-        # 只是那張超過 CARD_TIMEOUT。以前一慢就判斷線、等 CARD_RETRY 重登，畫面停 3-4 秒；
-        # 現在連續 SLOW_LIMIT 張都逾時才算斷線，中間只跳過那幾張，同一個登入繼續用。
+        # 只是那張超過 CARD_TIMEOUT。以前一慢就判斷線、等 CARD_RETRY 重登，畫面停 3-4 秒。
         # "no reply" is the ESP32 relay's word for it; since 10/19 the card is reached over the Pi's own USB wifi,
         # where the same late reply reads "timed out" - and was taken as the card gone every time (10/23).
+        # 11/02：連 3 張逾時就判斷線還是太早（見 KEEPALIVE 上面）。現在逾時就探一下卡：還連得上就同一個登入
+        # 繼續推（sent_pix 清掉，下一格重推這張），CARD_DOWN_AFTER 內都沒推成功、或卡真的連不上才算斷線。
         late = "no reply" in str(e) or "timed out" in str(e)
-        if card_ok is True and late and slow + 1 < SLOW_LIMIT:
-          slow += 1
-          say(f"card slow ({slow}/{SLOW_LIMIT}), frame skipped")
+        if card_ok is True and late and (slow_since is None or tick - slow_since < CARD_DOWN_AFTER) and _reachable(led):
+          if slow_since is None:
+            slow_since = tick
+            say("card slow (reply over the timeout, card still reachable), resending")
+          sent_pix = None
         else:
           if card_ok is not False:
             say(f"card down {args.card}: {e}{relay_diag(led)}")
-          card_ok, card_next, slow = False, tick + CARD_RETRY, 0
+          card_ok, card_next, slow_since = False, tick + CARD_RETRY, None
           led.P = None                               # 下次重新登入
 
     card_state["ok"] = card_ok
