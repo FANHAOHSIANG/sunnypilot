@@ -297,6 +297,40 @@ def c3_read(now, osm_m=None):
   return [round(1. - max(red, go, yellow), 3), round(red, 3), round(go, 3), round(yellow, 3)]
 
 
+def c3_pin(now):
+  """The pinned head's reading from C3 (c3link/c3pin.py, 2026-11-03) or None (C3 not there, older C3, moving)."""
+  try:
+    with open(C3_FILE) as f:
+      j = json.load(f)
+  except (OSError, ValueError):
+    return None
+  if now - float(j.get('t', 0)) > C3_FRESH_S or j.get('idle') or not isinstance(j.get('pin'), dict):
+    return None
+  return j['pin']
+
+
+def pin_go(pin, bl, br):
+  """GO for our way off C3's pinned head (2026-11-03, the driver: "只要釘住同一地方紅轉綠 就走"): the head that stopped
+  us has its red dark and a green lit - a green ball or a straight arrow, a turn arrow only with that blinker on.
+  Turning (blinker on) a green ball / straight in it is not enough while another head on the turn's side that was red
+  with it is still red - a turn head of its own (10/31 16:46, the straight head green 54 s while the left-turn head
+  beside it stayed red: the old rule GO'd on that); that turn head going green is our go.
+  Offline on 27 judged C3 waits (10/29 + 10/31): GO on red 0 (old rule 1), missed 5 of 26 (13), median 0.5 s."""
+  if not pin:
+    return False
+  want = 'left' if bl else 'right' if br else None
+  side = (pin.get('side') or {}).get(want) or {} if want else {}
+  if side.get('go'):
+    return True
+  if pin.get('state') != 'go':
+    return False
+  kinds = set(pin.get('kinds') or [])
+  go = bool(kinds & {'ball', 'straight', 'arrow?'}) or ('left' in kinds and bl) or ('right' in kinds and br)
+  if go and want is not None and want not in kinds and side.get('red'):
+    return False
+  return go
+
+
 def classify(sess, band):
   x = (band.astype(np.float32) / 255.).transpose(2, 0, 1)
   x = ((x - MEAN) / STD)[None]
@@ -320,13 +354,22 @@ class Wait:
     self.c3_red_t = None    # last time C3 saw a red in front during this wait
     self.c3_go_since = None
 
-  def watch_c3(self, p, t):
-    """C3's call (c3_read) at a wait: GO once a red was seen in this wait and go has held C3_GO_HOLD_S."""
+  def watch_c3(self, p, t, pin=None, blink=(False, False)):
+    """C3's call at a wait: GO once go has held C3_GO_HOLD_S. A C3 that pins (c3pin, 11/03 - 'pin' in its message):
+    go = pin_go on the pinned head alone, nothing else in view counts. An older C3: a red seen in this wait, then a
+    green ball and no red within C3_AZ_DEG (c3_read)."""
     if p[1] > 0:
       self.c3_red_t = t
-    ok = self.c3_red_t is not None and p[1] == 0 and p[2] >= GO_P
+    if pin is not None:
+      ok = pin_go(pin, *blink)
+    else:
+      ok = self.c3_red_t is not None and p[1] == 0 and p[2] >= GO_P
     self.c3_go_since = (self.c3_go_since or t) if ok else None
-    self.rows.append({'t': round(t - self.t0, 2), 'p': p, 'lit': None, 'src': 'c3'})
+    row = {'t': round(t - self.t0, 2), 'p': p, 'lit': None, 'src': 'c3'}
+    if pin is not None:
+      row['pin'] = {k: pin.get(k) for k in ('state', 'kinds', 'side', 'u', 'v', 'since')}
+      row['blink'] = [bool(blink[0]), bool(blink[1])]
+    self.rows.append(row)
     return ok and t - self.c3_go_since >= C3_GO_HOLD_S
 
   def find(self, det_sess, band, t):
@@ -680,7 +723,8 @@ def main():
         if wait.src != 'c3':
           wait.src, wait.run, wait.c3_go_since = 'c3', 0, None
           wait.lamps = [{'box': None, 'ref': 0., 'src': 'c3'}]   # the HUD's "watching", not "classifier only"
-        if wait.watch_c3(c3p, t):
+        cs = sm['carState']
+        if wait.watch_c3(c3p, t, c3_pin(t), (cs.leftBlinker, cs.rightBlinker)):
           sm.update(0)
           cs = sm['carState']
           lead = sm['radarState'].leadOne

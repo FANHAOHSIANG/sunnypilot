@@ -48,6 +48,8 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
+from c3pin import StopPin
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL_DET = os.environ.get('C3_DET', os.path.join(HERE, 'models/c3light_ft1n_704x1248_raw.onnx'))
 MODEL_GPU = os.environ.get('C3_GPU', os.path.join(HERE, 'models/c3light_ft1n_704x1248_raw_qcom.pkl'))
@@ -299,22 +301,29 @@ class Reader:
     self.gate = YellowGate()   # a yellow only where a light turned yellow (YELLOW_*)
     self.went_dark = False     # all tracked lights stopped showing a colour (the lit lamp moved, e.g. to a lamp of the
                                # head the finder did not box): find again at once instead of after FIND_EVERY_S
+    # stopped: the head that stopped us, pinned and read on its own (c3pin, 11/03) -> det.json 'pin' for tlwatchd
+    self.pin = StopPin((lambda rgb, boxes: lamps(self.lamp, rgb, boxes)) if self.lamp is not None else None)
 
   def tracking(self, now, stopped):
     return stopped and bool(self.boxes) and now - self.t_find < FIND_EVERY_S and not self.went_dark
 
-  def step(self, rows, row0, col0, now, stopped):
+  def step(self, rows, row0, col0, now, stopped, horizon=None, ahead=None):
     t0 = time.perf_counter()
+    # c3pin's straight ahead / horizon, full res (c3calib's are half res; none yet -> the band's defaults)
+    hv = 2 * float(horizon) if horizon is not None else ROW0_DEFAULT + BAND_ABOVE
+    au = 2 * float(ahead) if ahead is not None else FULL_W / 2
     if self.tracking(now, stopped):
       top = int(max(0, min(y1 - (y2 - y1) * TRACK_PAD for _, y1, _, y2 in self.boxes)))
       bot = int(min(FULL_H, max(y2 + (y2 - y1) * TRACK_PAD for _, y1, _, y2 in self.boxes) + 2))
       rgb, r0 = rows(top, bot)
       local = [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes]
       probs = colours(self.cls, rgb, local)
-      dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lamps(self.lamp, rgb, local))
+      lp = lamps(self.lamp, rgb, local)
+      dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lp)
       self.went_dark = not dets and self.n_shown > 0     # every tracked light dark: whatever is lit now is elsewhere
+      pin = self.pin.update(now, stopped, self.boxes, probs, lp, rgb, r0, hv, au)
       return dets, {'mode': 'track', 'found': len(self.boxes), 'dropped': dropped, 'det_ms': 0,
-                    'cls_ms': round((time.perf_counter() - t0) * 1000)}
+                    'cls_ms': round((time.perf_counter() - t0) * 1000), 'pin': pin}
     rgb, r0 = rows(row0, row0 + BAND_H)
     band = np.ascontiguousarray(rgb[row0 - r0:row0 - r0 + BAND_H, col0:col0 + BAND_W])
     found = find(self.det, band)
@@ -323,10 +332,12 @@ class Reader:
     self.scores, self.t_find = [f[4] for f in found], now
     local = [(x1, y1 - r0, x2, y2 - r0) for x1, y1, x2, y2 in self.boxes]
     probs = colours(self.cls, rgb, local)
-    dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lamps(self.lamp, rgb, local))
+    lp = lamps(self.lamp, rgb, local)
+    dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lp)
     self.n_shown, self.went_dark = len(dets), False
+    pin = self.pin.update(now, stopped, self.boxes, probs, lp, rgb, r0, hv, au)
     return dets, {'mode': 'find', 'found': len(found), 'dropped': dropped, 'det_ms': round((t1 - t0) * 1000),
-                  'cls_ms': round((time.perf_counter() - t1) * 1000)}
+                  'cls_ms': round((time.perf_counter() - t1) * 1000), 'pin': pin}
 
 
 def nv12_rgb(buf, r0, r1):
@@ -432,7 +443,7 @@ def main():
       continue
     last_out = now
     row0, col0 = band_row0(horizon), band_col0(ahead)
-    dets, st = reader.step(lambda a, b, buf=buf: nv12_rgb(buf, a, b), row0, col0, now, stopped)
+    dets, st = reader.step(lambda a, b, buf=buf: nv12_rgb(buf, a, b), row0, col0, now, stopped, horizon, ahead)
     t_end = time.monotonic()
     dt = t_end - t_last
     t_last = t_end

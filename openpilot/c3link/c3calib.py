@@ -397,6 +397,8 @@ def main():
           det = json.load(f)
         msg.update({"temp": det.get("temp"), "fps": det.get("fps"), "idle": det.get("idle", False),
                     "det_err": det.get("err", "")})
+        # stopped: the pinned head's reading (c3pin, 11/03) - tlwatchd's GO at a wait looks at this head only
+        msg["pin"] = det.get("pin") if not det.get("idle") else None
         if det.get("ts") != det_ts:
           det_ts = det.get("ts")
           if basis is not None and not det.get("idle"):
