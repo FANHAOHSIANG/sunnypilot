@@ -25,3 +25,6 @@ jobs:
 
       - name: Synthetic CAN FD DBC comparison regression
         run: python tools/fca_research/test_compare_canfd_dbc.py
+
+      - name: Synthetic AEB_SETTING bitfield audit regression
+        run: python tools/fca_research/test_aeb_setting_audit.py
