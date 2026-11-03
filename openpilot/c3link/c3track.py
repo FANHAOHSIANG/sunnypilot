@@ -12,8 +12,9 @@ frames judged by eye: right 99.6% of its calls, 0 red called go; the car's rule 
               point 4.5-8.5 m up, over the road ahead, near OSM's signal is a signal head; a far head (>~80 m, the
               distance too uncertain) counts when it is fixed, landscape, a vehicle head by the lamp model and at a
               head's elevation for OSM's distance - then OSM gives its distance
-              (a lamp riding on a MOVING radar target - C4's radar points - would be a vehicle's, not a head: a truck's
-              roof lamp fits a fixed point as well as a head does; written and replayed, but OFF - see RADAR_CHECK)
+              (a lamp riding on a MOVING radar target - C4's radar points - is a vehicle's, not a head: a truck's
+              roof lamp fits a fixed point as well as a head does, only at another scale; far ones are tested against
+              both: fixed at OSM's distance vs on the radar target - see RADAR_FIT)
   3 ours      among the heads: the one over our lane ahead, nearest, landscape preferred; kept until passed (a valid
               head 8 m nearer takes over: the near side of the junction)
   4 read      both models on that head's box (red lamp lit = red unless a turn arrow + its blinker says go; green
@@ -45,7 +46,8 @@ SIG_OK = 0.2          # fit's distance known to 20% (1 sigma)
 HEAD_H = (4.5, 8.5)   # m
 OSM_SHORT, OSM_PAST = 30., 35.
 LANE_Y = 12.
-LANE_Y_FAR = 9.       # m: |y| of heads > FAR_X (P3: a truck's roof lamp 101 m / 10.9 m right, 1029_173336)
+LANE_Y_FAR = 9.       # m: |y| of heads > FAR_X (P3: a truck's roof lamp 101 m / 10.9 m right, 1029_173336) - only
+                      # without radar (radar None / RADAR_CHECK off): with it, the radar fit tells the truck (leg 2)
 FAR_X = 80.
 LOST_HOLD_S = 1.0
 TOP_EXIT_PX = 8.       # full-res row: ours last seen this near the top = gone over us (no LOST_HOLD_S)
@@ -61,11 +63,11 @@ MOVING = 3.0          # m/s
 # moving target is not enough (a lead car hides nothing above its roof, and a head far ahead is "inside" the lead's
 # bearing and under 4.6 m when put at the lead's range): the lamp has to MOVE WITH it - put at that target's range the
 # lamp keeps one height and one lateral offset over seconds, while a fixed head behind it grows (h - 1.36 ~ d / X).
-# OFF on the car for now (RADAR_CHECK): over the 109 judged approaches every version tried took real heads too - a head
-# far ahead and a lamp on a car moving ahead at about our speed give nearly the same rays, so a few seconds of rays do
-# not tell them apart: called 57.5 -> 50-53%, and 2 frames red called go at 1031_091150. The truck of 1029_173336 is
-# left out by LANE_Y_FAR. C4 sends the radar points (hud/server.py 'tl.rad') so it can be tried on the car's logs.
-RADAR_CHECK = False
+# That test alone (rides_vehicle, leg 1) took real heads too - a head far ahead and a lamp on a car moving ahead at
+# about our speed give nearly the same rays: called 57.5 -> 50-53%, and 2 frames red called go at 1031_091150. Leg 2
+# (rides_fit): OSM gives the fixed head its scale, so the two hypotheses can be compared; far heads only. C4 sends the
+# radar points (hud/server.py 'tl.rad').
+RADAR_CHECK = True    # leg 2 (RADAR_FIT + RADAR_HOLD_UNDECIDED): 0 heads lost, 1029_173336 out without LANE_Y_FAR
 RADAR_MOVING = 3.0    # m/s: |vRel + vEgo| above this - the target moves (a car standing at the light is left alone)
 RADAR_HALF_W = 1.6    # m: half a vehicle's width (+ margin) around the radar point's bearing
 RADAR_AZ_MARGIN = 1.0  # deg
@@ -75,10 +77,19 @@ RADAR_WIN_S = 6.0     # s of the track's observations looked at
 RADAR_SPAN_S = 2.0    # ... spanning at least this, with
 RADAR_MIN_OBS = 4     # RADAR_MIN_OBS on the same target; less -> undecided: no NEW lock on it yet
 RADAR_D_JUMP = 4.0    # m: the same target from one observation to the next (range change vs its vRel)
-RADAR_HOLD_UNDECIDED = False   # 'undecided' blocks a new lock (tried: cost the most heads)
+RADAR_HOLD_UNDECIDED = True    # 'undecided' blocks a new lock (with rides_vehicle it cost the most heads; with
+                               # rides_fit, far only, it costs none and takes the truck's first 4 frames)
 RADAR_H_SLOPE = 0.12  # m/s: |slope| of the lamp's height put at the target's range - riding on it ~0
 RADAR_H_STD = 0.30    # m (+1% of the range): its spread
 RADAR_Y_STD = 0.40    # m (+1% of the range): the lateral offset's spread
+# tl-onboard leg 2: the two hypotheses fitted on the same observations - fixed at OSM's range (as fixed_far places it;
+# OSM fixes the scale a fixed-point fit alone cannot tell from a lamp moving with us) vs a fixed offset on the chained
+# radar target (its measured d(t), y(t)). 'ride' only when riding explains it clearly better.
+RADAR_FIT = True
+RADAR_OSM_WIN = (-25., 20.)  # m around OSM's distance the fixed head may be
+RADAR_OX = (0., 12., 1.)     # m: the lamp ahead of the radar point (a truck's cab roof is up to ~10 m ahead of its rear)
+RADAR_RATIO = 2.5            # rms_fixed >= RATIO * rms_ride ...
+RADAR_RMS_MIN = 0.15         # deg ... and rms_fixed above this
 
 # ---- lamp-model reads per cycle (c3lights reads the 2 biggest boxes for det.json; the chain wants the lamp model on
 # every box it may track: on 230 approaches 2.4 boxes a frame after dedupe, 90% <= 5)
@@ -320,6 +331,7 @@ class Track:
     self.fix = None
     self.rad = []                  # per observation: (t, el, az, [(d, y, vr) moving radar targets near its bearing])
     self.rides = None              # rides_vehicle: 'ride' / 'undecided' / None (fixed, or no moving target at it)
+    self.rfit = None               # rides_fit: (rms fixed at OSM, rms riding) deg
 
   @property
   def last(self):
@@ -568,6 +580,82 @@ def rides_vehicle(tr):
   return 'undecided' if short else None
 
 
+def _chains(obs):
+  """rides_vehicle's target chains: from each target at the newest observation back by range continuity."""
+  for start in obs[-1][3]:
+    chain, (tp, dp, vp) = [(obs[-1], start)], (obs[-1][0], start[0], start[2])
+    for o in reversed(obs[:-1]):
+      want = dp - vp * (tp - o[0])
+      c = min(o[3], key=lambda x: abs(x[0] - want), default=None)
+      if c is not None and abs(c[0] - want) <= RADAR_D_JUMP:
+        chain.append((o, c))
+        tp, dp, vp = o[0], c[0], c[2]
+    yield chain
+
+
+def fit_fixed_osm(t, az, el, ego, osm):
+  """rms (deg) of the best fixed point whose range at t[-1] is within RADAR_OSM_WIN of osm (az, el rad)."""
+  N, E, H = ego.poses(t)
+  n1, e1, h1 = ego.pose(float(t[-1]))
+  c1, s1 = math.cos(h1), math.sin(h1)
+  best = float('inf')
+  for x0 in np.arange(max(osm + RADAR_OSM_WIN[0], 15.), osm + RADAR_OSM_WIN[1] + 0.1, 2.5):
+    yz = np.array([x0 * math.tan(az[-1]), -x0 * math.tan(el[-1])])
+    for _ in range(4):                                     # Gauss-Newton on (y, z) at t[-1]
+      w = np.array([n1 + c1 * x0 - s1 * yz[0], e1 + s1 * x0 + c1 * yz[0], yz[1]])
+      f, J = _resid_jac(w, N, E, H, az, el)
+      Jyz = np.stack([J[:, 0] * -s1 + J[:, 1] * c1, J[:, 2]], 1)
+      try:
+        yz = yz - np.linalg.lstsq(Jyz, f, rcond=None)[0]
+      except np.linalg.LinAlgError:
+        break
+    w = np.array([n1 + c1 * x0 - s1 * yz[0], e1 + s1 * x0 + c1 * yz[0], yz[1]])
+    f, _ = _resid_jac(w, N, E, H, az, el)
+    if np.all(np.isfinite(f)):
+      best = min(best, math.degrees(float(np.sqrt(np.mean(f ** 2)))))
+  return best
+
+
+def fit_ride(az, el, d, y_left):
+  """rms (deg) of the best fixed offset (ox ahead, oy right, height <= RADAR_TOP) on the radar target (az, el rad)."""
+  best = float('inf')
+  for ox in np.arange(*RADAR_OX):
+    r = d + ox
+    oy = float(np.mean(np.tan(az) * r + y_left))
+    hh = min(float(np.mean(np.tan(el) * r)), RADAR_TOP - CAM_H)
+    if abs(oy) > RADAR_HALF_W + 1.:
+      continue
+    f = np.concatenate([np.arctan2(-y_left + oy, r) - az, np.arctan2(hh, r) - el])
+    best = min(best, math.degrees(float(np.sqrt(np.mean(f ** 2)))))
+  return best
+
+
+def rides_fit(tr, ego, osm):
+  """RADAR_FIT's test -> 'ride' / 'undecided' (no chain long enough) / None; tr.rfit = (rms_fixed, rms_ride) kept."""
+  obs = [o for o in tr.rad if o[0] >= tr.rad[-1][0] - RADAR_WIN_S] if tr.rad else []
+  tr.rfit = None
+  if osm is None or osm <= FAR_X or not obs or not obs[-1][3]:
+    return None                                  # near: OSM can still be the junction being crossed (1031_090536)
+  short = False
+  for chain in _chains(obs):
+    if len(chain) < RADAR_MIN_OBS or chain[0][0][0] - chain[-1][0][0] < RADAR_SPAN_S:
+      short = True
+      continue
+    chain = chain[::-1]
+    t = np.array([o[0] for o, _ in chain])
+    az = np.radians([o[2] for o, _ in chain])
+    el = np.radians([o[1] for o, _ in chain])
+    d = np.array([c[0] for _, c in chain])
+    yl = np.array([c[1] for _, c in chain])
+    # the fixed head at osm now = at osm + the distance driven since each observation: put osm at the chain's end
+    rf = fit_fixed_osm(t, az, el, ego, osm)
+    rr = fit_ride(az, el, d, yl)
+    tr.rfit = (round(rf, 3), round(rr, 3))
+    if rf >= RADAR_RMS_MIN and rf >= RADAR_RATIO * rr:
+      return 'ride'
+  return 'undecided' if short else None
+
+
 # ---------------------------------------------------------------- 4 reading
 def head_group(dets, seed, gap=1.6):
   grp = [seed]
@@ -714,7 +802,7 @@ class Follower:
       for tr in trk.tracks:
         if not tr.misses and tr.obs[-1][1] == i:
           tr.rad = [o for o in tr.rad if o[0] >= t - RADAR_WIN_S] + [(t, tr.last.el, tr.last.az, near_targets(tr.last, radar, v))]
-          tr.rides = rides_vehicle(tr)
+          tr.rides = rides_fit(tr, ego, osm_now) if RADAR_FIT else rides_vehicle(tr)
     ours = self.ours
     no_osm = osm_now is None and v >= MOVING
     if no_osm:
@@ -739,12 +827,15 @@ class Follower:
         p = np.array([osm_now, osm_now * math.tan(math.radians(d.az)), 0.])
       else:
         continue
-      if p[0] < 3. or abs(p[1]) > LANE_Y or (LANE_Y_FAR and p[0] > FAR_X and abs(p[1]) > LANE_Y_FAR) or tr.last.box[1] < 4:
+      lane_far = LANE_Y_FAR if (radar is None or not self.radar_check) else 0.
+      if p[0] < 3. or abs(p[1]) > LANE_Y or (lane_far and p[0] > FAR_X and abs(p[1]) > lane_far) or tr.last.box[1] < 4:
         continue
       if osm_now is not None and not osm_now - OSM_SHORT <= p[0] <= osm_now + OSM_PAST:
         continue
-      if self.radar_check and (tr.rides == 'ride' or (RADAR_HOLD_UNDECIDED and tr.rides == 'undecided' and tr is not ours)):
-        continue                                 # on a moving vehicle / maybe: no new lock until it is told
+      if self.radar_check and (tr.rides == 'ride' or (RADAR_HOLD_UNDECIDED and tr.rides == 'undecided' and tr is not ours
+                                                       and not (tr.last.p_go() >= 0.5 and tr.last.p_red() < 0.5))):
+        continue                                 # on a moving vehicle / maybe (unless lit green - no vehicle's lamp is):
+                                                 # no new lock until it is told
       upright = np.median([o[2].h > 1.3 * o[2].w for o in tr.obs[-6:]]) > 0.5
       cands.append((abs(p[1]) / 3. + p[0] / 40. + (UPRIGHT_COST if upright else 0.), p[0], tr))
     if cands:
