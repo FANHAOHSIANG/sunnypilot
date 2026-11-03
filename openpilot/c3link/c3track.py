@@ -53,9 +53,31 @@ LOST_HOLD_S = 1.0
 TOP_EXIT_PX = 8.       # full-res row: ours last seen this near the top = gone over us (no LOST_HOLD_S)
 WIDTH_K = 1.0
 UPRIGHT_COST = 2.0
+PASS_BLOCK_M = 30.    # m: ours gone out over the top (gone_over) while its fixed point is still ahead (heads leave the
+PASS_BLOCK_S = 6.     # picture ~16 m before the car passes under them): until it is passed (x < 2 m, at most
+                      # PASS_BLOCK_S) only a head this much further on may be locked - the next junction's, not a side
+                      # head of the same junction (TASK3 leg 4: 1029_141509 / 142426 locked another movement's red
+                      # the moment ours left the top; the deployed version kept ours, uncalled, instead); 0: off
+PASS_GO_RED = True    # ... only a head reading red while ours left it called go (one junction's heads for one
+                      # movement show one colour: a red one beside our go is another movement's; ours yellow -> a red
+                      # one, or red -> red, is the same signal's far-side head - 1029_162439, 142928)
+UPRIGHT_SIDE_Y = 5.   # m: an upright head this far to the side is no candidate (TASK3: 1029_142409/142426's red on the
+                      # left pole is another movement's; our heads there are landscape over the road); 0: off
 SWITCH_NEARER_M = 8.
 REFIT_EVERY = 2
 MAX_MISS = 4
+# TASK3 leg 2: the per-frame numbers above / below were tuned on the 0.5 s replays; live C3 cycles every ~0.65 s
+CYCLE_REF = 0.5       # s
+GATE_TIME = False     # Tracker gate x max(1, cycle / CYCLE_REF) (the heads move further between two cycles)
+SEQ_GAP_S = 0.        # s: a pending go survives an unread cycle (None) this long after its first go (0: None resets)
+FIT_SPAN_S = 0.       # s: a fit is tried from 3 observations when they span this (0: only from 4, as before)
+SEQ_WARM_S = 1.5      # s: a newly locked head's own reads this far back (before the lock, when the lamp model read it)
+                      # go into its Sequence first - the greens / red seen before the lock (0: it starts empty)
+KEEP_OURS = True      # ours still followed (misses <= 1) but no candidate this cycle (near / overhead its fit's rms grows,
+                      # OSM's distance already the next junction's): kept against the candidates by where it was the
+                      # last time it was one, as an ok one is (else the best candidate wins)
+PRED_EGO_R = 60.      # m: a track seen once is looked for where the car's own motion (C3 gyro + vEgo) moves a fixed
+                      # point this far along its ray (0: where it was - a turning car moved far heads past the gate)
 OSM_MAX = 160.        # tlwatchd APPROACH_M: the analysis had OSM only inside it (approach.jsonl)
 MOVING = 3.0          # m/s
 
@@ -91,6 +113,21 @@ RADAR_OX = (0., 12., 1.)     # m: the lamp ahead of the radar point (a truck's c
 RADAR_RATIO = 2.5            # rms_fixed >= RATIO * rms_ride ...
 RADAR_RMS_MIN = 0.15         # deg ... and rms_fixed above this
 
+# ---- 11/04 TASK3 (the driver 11/03: "沒法用地圖輔助就好提高辨燈的準確度嗎" -> "直接做第一項"): between two finder cycles
+# (GPU, ~0.45 s, the CPU idle meanwhile) c3lights re-finds the followed heads on NEWER frames - the same finder on the
+# CPU over a small crop around where each head should be now (Follower.local_targets: its fixed point projected with the
+# pose, else its last two observations extrapolated) - and they come back as extra observations (Follower.step_local):
+# more rays per second -> 4 observations / enough parallax sooner, a missed finder cycle bridged. Appearance (vehicle /
+# pedestrian / landscape medians) stays on the finder's own reads (a local find has no lamp-model read); a local
+# observation is never read for the light unless the lamp model was run on it (LOCAL_READ, ours only).
+LOCAL_MAX = 3         # crops per local pass (one crop serves every target inside it)
+LOCAL_S = 192         # px, full res: the crop (the small finder's input, models/c3light_ft1n_192x192_raw.onnx)
+LOCAL_EDGE = 24       # px: a target is served by a crop when its predicted centre is this far inside the crop's edge
+LOCAL_CONF = 0.15     # the small finder's class-9 score (c3lights DET_CONF)
+LOCAL_SIZE = 0.9      # |log| size change vs the track's last box, as Tracker
+LOCAL_AGE_S = 1.5     # s: tracks seen (finder or local) within this are looked for
+LOCAL_READ = False    # ours re-found locally: lamp model + read it (else geometry only)
+
 # ---- lamp-model reads per cycle (c3lights reads the 2 biggest boxes for det.json; the chain wants the lamp model on
 # every box it may track: on 230 approaches 2.4 boxes a frame after dedupe, 90% <= 5)
 LAMP_AZ = 40.         # deg
@@ -121,9 +158,10 @@ class Cam:
 
 # ---------------------------------------------------------------- one box
 class Det:
-  __slots__ = ('box', 'u', 'v', 'w', 'h', 'det', 'cls', 'lamp', 'az', 'el', 'ray')
+  __slots__ = ('box', 'u', 'v', 'w', 'h', 'det', 'cls', 'lamp', 'az', 'el', 'ray', 'local')
 
-  def __init__(self, box, det, cls, lamp, cam):
+  def __init__(self, box, det, cls, lamp, cam, local=False):
+    self.local = local     # re-found by a local pass (TASK3), not the finder's full band
     self.box = list(box)
     x1, y1, x2, y2 = self.box
     self.u, self.v, self.w, self.h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
@@ -332,10 +370,22 @@ class Track:
     self.rad = []                  # per observation: (t, el, az, [(d, y, vr) moving radar targets near its bearing])
     self.rides = None              # rides_vehicle: 'ride' / 'undecided' / None (fixed, or no moving target at it)
     self.rfit = None               # rides_fit: (rms fixed at OSM, rms riding) deg
+    self.rds = []                  # SEQ_WARM_S: (t, read) before it was locked
+    self.cand_world = None         # KEEP_OURS: where it was the last cycle it was a candidate
 
   @property
   def last(self):
     return self.obs[-1][2]
+
+  @property
+  def fobs(self):
+    """The finder's own observations (appearance: lamp-model / lightcls medians, landscape) - local finds left out."""
+    return [o for o in self.obs if not o[2].local]
+
+  @property
+  def flast(self):
+    fo = self.fobs
+    return fo[-1][2] if fo else self.last
 
   def add(self, t, i, det):
     self.obs.append((t, i, det))
@@ -350,6 +400,12 @@ class Track:
         if px is not None:
           return px
     d = self.last
+    if PRED_EGO_R and len(self.obs) == 1 and d.ray[0] > 0.05 and t > self.obs[-1][0]:
+      p = ego.to_car(ego.to_world(d.ray / d.ray[0] * PRED_EGO_R, self.obs[-1][0]), t)
+      if p[0] > 1.:
+        px = ego.cam.pix(p)
+        if px is not None:
+          return px
     if len(self.obs) >= 2 and ego.speed(t) > 0.5:
       (t0, _, d0), (t1, _, d1) = self.obs[-2], self.obs[-1]
       if t1 > t0:
@@ -362,17 +418,20 @@ class Tracker:
   def __init__(self, max_miss=MAX_MISS):
     self.max_miss = max_miss
     self.tracks = []
+    self.t_prev = None
 
   def step(self, t, i, dets, ego):
     live = self.tracks
     assigned = {}
+    gk = max(1., (t - self.t_prev) / CYCLE_REF) if (GATE_TIME and self.t_prev is not None) else 1.
+    self.t_prev = t
     if live and dets:
       fast = ego.speed(t) > 0.5
       cost = np.full((len(live), len(dets)), 1e6)
       for a, tr in enumerate(live):
         pu, pv = tr.predict(t, ego)
         lw, lh = tr.last.w, tr.last.h
-        gate = max(1.2 * max(lw, lh), 12.) * (1 + tr.misses) + (25. if fast else 0.)
+        gate = (max(1.2 * max(lw, lh), 12.) * (1 + tr.misses) + (25. if fast else 0.)) * gk
         for b, d in enumerate(dets):
           dist = math.hypot(d.u - pu, d.v - pv)
           size = max(abs(math.log(max(d.h, 1) / max(lh, 1))), WIDTH_K * abs(math.log(max(d.w, 1) / max(lw, 1))))
@@ -400,6 +459,45 @@ class Tracker:
         keep.append(tr)
     self.tracks = keep
     return assigned
+
+
+# ---------------------------------------------------------------- local passes (TASK3)
+def local_crops(targets, S=LOCAL_S, n_max=LOCAL_MAX, W=1928, H=1208):
+  """Crop windows for a local pass, targets [(track, u, v)] in priority order -> [(x0, y0, k, [targets])]: k x k
+  pixels averaged into one (a head too big for S at full res - near heads are 100-250 px wide - is looked for in a
+  k*S window brought down to S); a target inside an existing window of its k (LOCAL_EDGE in) shares it."""
+  crops = []
+  for tg in targets:
+    tr, pu, pv = tg
+    k = max(1, math.ceil(1.8 * max(tr.last.w, tr.last.h) / S))
+    R = S * k
+    for c in crops:
+      if c[2] == k and c[0] + LOCAL_EDGE * k <= pu <= c[0] + R - LOCAL_EDGE * k and c[1] + LOCAL_EDGE * k <= pv <= c[1] + R - LOCAL_EDGE * k:
+        c[3].append(tg)
+        break
+    else:
+      if len(crops) < n_max and R <= min(W, H):
+        crops.append([int(round(min(max(pu - R / 2, 0), W - R))), int(round(min(max(pv - R / 2, 0), H - R))), k, [tg]])
+  return crops
+
+
+def local_match(targets, boxes, t, ego):
+  """The boxes a crop gave (full res, deduped) -> {track id: box index}: Tracker's cost (distance from the prediction
+  within its gate + size change) and Hungarian."""
+  if not targets or not boxes:
+    return {}
+  fast = ego.speed(t) > 0.5
+  cost = np.full((len(targets), len(boxes)), 1e6)
+  for a, (tr, pu, pv) in enumerate(targets):
+    lw, lh = tr.last.w, tr.last.h
+    gate = max(1.2 * max(lw, lh), 12.) * (1 + tr.misses) + (25. if fast else 0.)
+    for b, (x1, y1, x2, y2) in enumerate(boxes):
+      dist = math.hypot((x1 + x2) / 2 - pu, (y1 + y2) / 2 - pv)
+      size = max(abs(math.log(max(y2 - y1, 1) / max(lh, 1))), WIDTH_K * abs(math.log(max(x2 - x1, 1) / max(lw, 1))))
+      if dist <= gate and size < LOCAL_SIZE:
+        cost[a, b] = dist / gate + 0.5 * size
+  ra, rb = assign(cost)
+  return {targets[a][0].id: int(b) for a, b in zip(ra, rb, strict=True) if cost[a, b] < 1e5}
 
 
 # ---------------------------------------------------------------- 2 fixed point (scipy least_squares, soft_l1, numpy)
@@ -468,7 +566,9 @@ def soft_l1_fit(w0, N, E, H, az, el, iters=100):
 
 
 def triangulate(track, ego, min_obs=3, min_travel=3., max_obs=30, warm=None):
-  obs = track.obs[-max_obs:]
+  fo = track.fobs
+  t_from = fo[-max_obs][0] if len(fo) >= max_obs else -1e18     # max_obs finder observations + the local ones since
+  obs = [o for o in track.obs if o[0] >= t_from]
   if len(obs) < min_obs:
     return None
   ts = np.array([o[0] for o in obs])
@@ -515,8 +615,9 @@ def el_range(osm_m):
 def head_ok(tr, fix):
   if fix is None or not fix['ok'] or not HEAD_H[0] <= fix['height'] <= HEAD_H[1] or abs(fix['y']) > 14.:
     return False
-  veh = np.median([o[2].p_vehicle() for o in tr.obs])
-  ped = np.median([o[2].p_ped() for o in tr.obs])
+  fo = tr.fobs
+  veh = np.median([o[2].p_vehicle() for o in fo])
+  ped = np.median([o[2].p_ped() for o in fo])
   return veh >= 0.5 and ped < 0.5
 
 
@@ -528,10 +629,11 @@ def fixed_far(tr, osm_m):
   lo, hi = el_range(osm_m)
   if not lo <= d.el <= hi:
     return False
-  if np.median([o[2].w >= 1.3 * o[2].h for o in tr.obs[-6:]]) < 0.5:
+  fo = tr.fobs
+  if np.median([o[2].w >= 1.3 * o[2].h for o in fo[-6:]]) < 0.5:
     return False
-  veh = np.median([o[2].p_vehicle() for o in tr.obs])
-  ped = np.median([o[2].p_ped() for o in tr.obs])
+  veh = np.median([o[2].p_vehicle() for o in fo])
+  ped = np.median([o[2].p_ped() for o in fo])
   return veh >= 0.5 and ped < 0.5
 
 
@@ -746,18 +848,24 @@ class Sequence:
   def __init__(self, n_go=2):
     self.call, self.n_go, self.pend, self.npend = None, n_go, None, 0
     self.red_cell = None
+    self.pend_t = None
 
-  def feed(self, r, cell=None):
+  def feed(self, r, cell=None, t=None):
     if r == 'red' and cell is not None:
       self.red_cell = cell if self.red_cell is None else 0.8 * self.red_cell + 0.2 * cell
     if r == 'yellow' and cell is not None and self.red_cell is not None and abs(cell - self.red_cell) < 0.2:
       r = 'red'
+    if r is None and SEQ_GAP_S and self.pend == 'go' and t is not None and self.pend_t is not None and \
+       t - self.pend_t <= SEQ_GAP_S:
+      return self.call                           # an unread cycle between two greens (SEQ_GAP_S)
     if r is None or r == self.call:
       self.pend, self.npend = None, 0
       return self.call
     if (self.call, r) not in self.OK:
       return self.call
     need = self.n_go if r == 'go' else 1
+    if self.pend != r:
+      self.pend_t = t
     self.npend = self.npend + 1 if self.pend == r else 1
     self.pend = r
     if self.npend >= need:
@@ -774,6 +882,8 @@ class Follower:
     self.i = 0
     self.radar_check = radar_check
     self.last_t = None
+    self.warm = None                             # SEQ_WARM_S: the new lock's reads before it, until its first read
+    self.passing = None                          # PASS_BLOCK_M: (world point, t, its call) of ours gone over the top
 
   def reset(self):
     self.__init__(self.radar_check)
@@ -787,15 +897,59 @@ class Follower:
       self.reset()                               # a gap (C3 was idle / not reading): start over
     self.last_t = t
     self.i += 1
-    i = self.i
+    self.trk.step(t, self.i, dets, ego)
+    return self._decide(t, self.i, dets, ego, osm, blink, radar, crop, lamp_fn)
+
+  def step_local(self, t, found, dets, ego, osm=None, blink=None, radar=None, crop=None, lamp_fn=None):
+    """A local pass (TASK3) at t: found {track id: Det (local=True)} - the followed heads re-found in their crops - as
+    those tracks' next observation; the others are left as they are (no miss counted: they were not looked for).
+    dets: every box the pass found (head_group for ours). Then the same refit / lock / read as step(); ours is read
+    only when its local Det has a lamp-model read (LOCAL_READ)."""
+    if self.last_t is None or t <= self.last_t or t - self.last_t > 5.:
+      return None                                # out of order / after a gap: the finder cycle comes first
+    self.last_t = t
+    self.i += 1
+    for tr in self.trk.tracks:
+      d = found.get(tr.id)
+      if d is not None:
+        tr.add(t, self.i, d)
+        tr.misses = 0
+    return self._decide(t, self.i, dets, ego, osm, blink, radar, crop, lamp_fn, local=True)
+
+  def local_targets(self, t, ego, n_max=LOCAL_MAX * 3):
+    """The tracks a local pass looks for at t, most wanted first: ours, then head-like tracks seen lately in front
+    (landscape before upright, nearer straight ahead first) -> [(track, u, v)] predicted centre (full res)."""
+    out = []
+    for tr in self.trk.tracks:
+      if tr.misses > 1 or t - tr.obs[-1][0] > LOCAL_AGE_S:
+        continue
+      d, fl = tr.last, tr.flast
+      if d.el < LAMP_EL_MIN or abs(d.az) > LAMP_AZ:
+        continue
+      fo = tr.fobs[-8:]
+      if max(np.median([o[2].p_vehicle() for o in fo]), fl.p_red(), fl.p_go()) < 0.3 or \
+         np.median([o[2].p_ped() for o in fo]) >= 0.5:
+        continue
+      if tr.fix is not None and tr.fix.get('ok') and ego.to_car(tr.fix['world'], t)[0] < 2.:
+        continue                                 # passed under it
+      pu, pv = tr.predict(t, ego)
+      if not (-LOCAL_EDGE < pu < 2 * CX + LOCAL_EDGE and -LOCAL_EDGE < pv < 2 * CY + LOCAL_EDGE):
+        continue
+      upright = np.median([o[2].h > 1.3 * o[2].w for o in fo[-6:]]) > 0.5
+      out.append(((tr is not self.ours, upright, abs(d.az)), tr, pu, pv))
+    out.sort(key=lambda x: x[0])
+    return [(tr, pu, pv) for _, tr, pu, pv in out[:n_max]]
+
+  def _decide(self, t, i, dets, ego, osm, blink, radar, crop, lamp_fn, local=False):
     v = ego.speed(t)
     osm_now = osm if (osm is not None and osm <= OSM_MAX) else None
     trk = self.trk
-    trk.step(t, i, dets, ego)
     for tr in trk.tracks:
-      if len(tr.obs) < 4 or tr.misses or (tr.fix is not None and len(tr.obs) % REFIT_EVERY):
+      short = len(tr.obs) < 4 and not (FIT_SPAN_S and len(tr.obs) == 3 and tr.obs[-1][0] - tr.obs[0][0] >= FIT_SPAN_S)
+      if short or tr.misses or tr.obs[-1][1] != i or (tr.fix is not None and len(tr.obs) % REFIT_EVERY):
         continue
-      if tr.last.el < -1. or max(np.median([o[2].p_vehicle() for o in tr.obs[-8:]]), tr.last.p_red(), tr.last.p_go()) < 0.3:
+      fl = tr.flast
+      if tr.last.el < -1. or max(np.median([o[2].p_vehicle() for o in tr.fobs[-8:]]), fl.p_red(), fl.p_go()) < 0.3:
         continue
       tr.fix = triangulate(tr, ego, warm=tr.fix['world'] if tr.fix is not None and tr.fix['ok'] else None)
     if self.radar_check:
@@ -808,14 +962,40 @@ class Follower:
     if no_osm:
       ours = None
     gone_over = False
+    if ours is not None and ours in trk.tracks and ours.obs[-1][1] != i and t - ours.obs[-1][0] > LOST_HOLD_S and \
+       ours.fix is not None and ours.fix.get('ok'):
+      px = ego.cam.pix(ego.to_car(ours.fix['world'], t))
+      if px is None or px[1] < TOP_EXIT_PX:     # unseen LOST_HOLD_S while out over the top (below): passed under it
+        self.passing = (ours.fix['world'], t, self.seq.call) if PASS_BLOCK_M else None
+        ours, gone_over = None, True
     if ours is not None and (ours not in trk.tracks or (ours.fix and ego.to_car(ours.fix['world'], t)[0] < 2.)):
       # lost for good, or passed under it. Out over the top of the picture / passed: that junction is being crossed and
       # its call says nothing about the next one - no LOST_HOLD_S of it (11/03 tl-onboard: 1029_172749 held the
       # overhead green 1 s into the next junction's red, with the live pose a beat later to lock the next head)
       gone_over = ours.last.box[1] < TOP_EXIT_PX or (ours.fix is not None and ego.to_car(ours.fix['world'], t)[0] < 2.)
+      if not gone_over and ours.fix is not None and ours.fix.get('ok'):
+        # lost where its fixed point is already out over the top of the picture: passed under it unseen, as
+        # TOP_EXIT_PX (TASK3: 1031_091150 at a 0.455 / 0.55 / 0.7 s cycle - the near junction's low head left the top
+        # between two finder frames, LOST_HOLD_S then carried its green into the next junction's red)
+        px = ego.cam.pix(ego.to_car(ours.fix['world'], t))
+        gone_over = px is None or px[1] < TOP_EXIT_PX
+      if gone_over and PASS_BLOCK_M and ours.fix is not None and ours.fix.get('ok'):
+        self.passing = (ours.fix['world'], t, self.seq.call)
       ours = None
+    x_pass = None
+    if self.passing is not None:
+      x_pass = ego.to_car(self.passing[0], t)[0]
+      if x_pass < 2. or t - self.passing[1] > PASS_BLOCK_S or ours is not None:
+        self.passing, x_pass = None, None
     if ours is not None and self.radar_check and ours.rides == 'ride':
       ours = None                                # it rides on a moving vehicle after all
+    for tr in (trk.tracks if SEQ_WARM_S else []):
+      if tr.obs[-1][1] == i and tr is not ours:
+        d = tr.obs[-1][2]
+        rc = None
+        if d.lamp and not d.local and d.p_vehicle() >= 0.5 and d.p_ped() < 0.5:
+          rc = reading(d, head_group(dets, d) if d in dets else [d], blink)
+        tr.rds = [x for x in tr.rds if x[0] >= t - SEQ_WARM_S] + [(t, rc)]
     cands = []
     for tr in ([] if no_osm else trk.tracks):
       if tr.misses > 1 or tr.fix is None:
@@ -832,16 +1012,31 @@ class Follower:
         continue
       if osm_now is not None and not osm_now - OSM_SHORT <= p[0] <= osm_now + OSM_PAST:
         continue
+      if x_pass is not None and tr.fix['ok'] and p[0] < x_pass + PASS_BLOCK_M and \
+         (not PASS_GO_RED or (self.passing[2] == 'go' and
+                              (tr.last.p_red() >= 0.5 or any(x[1] == 'red' for x in getattr(tr, 'rds', []))))):
+        continue                                 # the junction being passed: not ours any more, nor its side heads
+                                                 # (its own fit's range; a fixed_far one sits at OSM's, not its own)
       if self.radar_check and (tr.rides == 'ride' or (RADAR_HOLD_UNDECIDED and tr.rides == 'undecided' and tr is not ours
                                                        and not (tr.last.p_go() >= 0.5 and tr.last.p_red() < 0.5))):
         continue                                 # on a moving vehicle / maybe (unless lit green - no vehicle's lamp is):
                                                  # no new lock until it is told
-      upright = np.median([o[2].h > 1.3 * o[2].w for o in tr.obs[-6:]]) > 0.5
+      upright = np.median([o[2].h > 1.3 * o[2].w for o in tr.fobs[-6:]]) > 0.5
+      if upright and UPRIGHT_SIDE_Y and abs(p[1]) > UPRIGHT_SIDE_Y:
+        continue
+      tr.cand_world = ego.to_world(p, t)
       cands.append((abs(p[1]) / 3. + p[0] / 40. + (UPRIGHT_COST if upright else 0.), p[0], tr))
     if cands:
       cost, x, tr = min(cands, key=lambda c: c[0])
+      w_ours = None
       if ours is not None and ours.fix and ours.fix['ok']:
-        x_ours = ego.to_car(ours.fix['world'], t)[0]
+        w_ours = ours.fix['world']
+      elif KEEP_OURS and ours is not None and ours.misses <= 1:
+        # its own fit even if not ok (a fixed_far candidate sat at OSM's distance: maybe the next junction's), else
+        # where it was the last time it was a candidate (KEEP_OURS)
+        w_ours = ours.fix['world'] if (ours.fix is not None and ours.fix['x'] > 0) else ours.cand_world
+      if w_ours is not None:
+        x_ours = ego.to_car(w_ours, t)[0]
         near = min(cands, key=lambda c: c[1] + (1e3 if c[0] - abs(c[1]) / 40. >= UPRIGHT_COST else 0.))
         if near[2] is not ours and near[1] < x_ours - SWITCH_NEARER_M:
           tr = near[2]
@@ -851,6 +1046,7 @@ class Follower:
         same = self.ours_world is not None and np.linalg.norm(tr.fix['world'][:2] - self.ours_world[:2]) < 3.
         if not same:
           self.seq = Sequence()
+          self.warm = [x for x in tr.rds if x[0] < t] if SEQ_WARM_S else None
         ours = tr
     self.ours = ours
     if ours is not None and ours.fix and ours.fix['ok']:
@@ -863,14 +1059,24 @@ class Follower:
         if not d.lamp and lamp_fn is not None:
           d.lamp = lamp_fn(d.box) or {}
         rd = reading(d, head_group(dets, d) if d in dets else [d], blink)
-        if d.p_vehicle() < 0.5 or d.p_ped() >= 0.5:
-          rd = None
+        if d.p_vehicle() < 0.5 or d.p_ped() >= 0.5 or (d.local and not d.lamp):
+          rd = None                              # a local find without the lamp model: position only
         if d.landscape() and rd in ('red', 'yellow') and crop is not None:
           cell = lit_cell(crop(d.box))
       if ours.fix:
         p = ego.to_car(ours.fix['world'], t)
         pos = (round(float(p[0]), 1), round(float(p[1]), 1), round(ours.fix['height'], 1))
-    call = self.seq.feed(rd, cell)
+    # a local pass without a read of ours says nothing about the light: not fed (a None would also cut short the two
+    # greens in a row a go needs)
+    if self.warm is not None and not (local and rd is None):
+      if rd is not None:                         # SEQ_WARM_S: the same read in a row just before the lock counts
+        n = 0
+        while n < len(self.warm) and self.warm[-1 - n][1] == rd:
+          n += 1
+        for th, rc in self.warm[len(self.warm) - n:]:
+          self.seq.feed(rc, None, th)
+      self.warm = None
+    call = self.seq.call if (local and rd is None) else self.seq.feed(rd, cell, t)
     if ours is not None:
       self.lost_since = None
     else:
