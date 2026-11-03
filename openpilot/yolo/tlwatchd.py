@@ -223,9 +223,12 @@ class LightCall:
     self.held = False
     self.src = None         # 'trk' while C3's follower decides (direct), else the window read
 
-  def update(self, p, t, direct=None):
+  def update(self, p, t, direct=None, go_ok=True):
     """direct (C3's follower has our head locked and a call - trk_direct): taken as it is, already in order and
-    confirmed there; held as any call (LIGHT_HOLD / LIGHT_HOLD_STOP) once it stops coming."""
+    confirmed there; held as any call (LIGHT_HOLD / LIGHT_HOLD_STOP) once it stops coming.
+    go_ok False (window_go_ok): the window's green is not a go - two in a row only end the call held (to unknown, as
+    a green read used to end a held red: without that, on the 109 judged approaches, a red the window read off another
+    road's head stayed 5 s and green called red went 176 -> 212) - and a go the window read had is dropped."""
     if direct is not None:
       self.src, self.last = 'trk', None
       self.call, self.until = direct, t + (LIGHT_HOLD if direct == 'go' else LIGHT_HOLD_STOP)
@@ -235,10 +238,18 @@ class LightCall:
     self.src = 'c3' if self.src == 'trk' else self.src
     yellow = len(p) > 3 and p[3] >= LIGHT_P
     c = 'red' if p[1] >= LIGHT_P else ('yellow' if yellow else ('go' if p[2] >= LIGHT_P else None))
-    if c is not None and c == self.last:
+    if c == 'go' and not go_ok:
+      c = 'clear'
+    if c == 'clear' and c == self.last:
+      self.call, self.until, self.shown, self.shown_until = 'unknown', t, 'unknown', t
+    elif c is not None and c == self.last:
       self.call, self.until = c, t + (LIGHT_HOLD if c == 'go' else LIGHT_HOLD_STOP)
       self.shown, self.shown_until, self.confirmed_t = c, t + LIGHT_SHOW_HOLD, t
     self.last = c
+    if not go_ok and self.call == 'go':
+      self.call, self.until = 'unknown', t
+      if self.shown == 'go':
+        self.shown, self.shown_until = 'unknown', t
     if t > self.until:
       self.call = 'unknown'
     if t > self.shown_until:
@@ -335,6 +346,15 @@ def trk_direct(trk):
   if trk is None or trk.get('ours') is None or trk.get('call') not in ('red', 'go', 'yellow'):
     return None
   return trk['call']
+
+
+def window_go_ok(trk):
+  """Whether LightCall may take the window read's green as go, coming up to a signal: not while C3's follower is running
+  but has no call of its own (no head of ours locked, or locked and not read yet) - 2026-11-03, the driver: "1就先做吧".
+  On the 109 judged approaches the frames sent on as red called go (10-11) were all in that gap: the window read's
+  green (10/29 14:45 just round a corner, the follower locked 3 s later) or its go held from the junction just passed
+  (16:08, under the viaduct). Without a follower (an older C3) the window read stays as it was."""
+  return trk is None or trk_direct(trk) is not None
 
 
 def trk_log(trk):
@@ -727,7 +747,7 @@ def main():
           if st['v'] >= MOVING and osm_m is not None and osm_m <= APPROACH_M and c3p is not None:
             # coming up to a signal, C3 looking: its call, report only
             p_last = c3p
-            light.update(p_last, t, trk_direct(trk))
+            light.update(p_last, t, trk_direct(trk), window_go_ok(trk))
             appr_log.write(json.dumps({'t': round(t, 2), 'wall': tag, 'v': round(float(st['v']), 2),
                                        'osm_m': round(osm_m, 1), 'kind': osm_kind, 'p': p_last, 'call': light.call,
                                        'lead': round(float(st['lead']), 1), 'en': bool(st['en']), 'src': 'c3',
