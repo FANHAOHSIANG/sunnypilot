@@ -21,16 +21,27 @@ Screen.pages 是這個畫面要輪替的幾頁字（每頁 PAGE_SECS 秒），le
      一輪（至少 MIN_SHOW 秒，多頁的播到 MAX_SHOW 秒）、新畫面也要連續被選中 DEBOUNCE 秒才切。
   3. 前一個畫面講的事已經發生了，下一個直接接上（FLOW），不等。
 
-OP 沒接手（selfdriveState.enabled 為 false）或車機待機：只顯示日期時間 —— 那時候規劃器的
+OP 沒接手（selfdriveState.enabled 為 false）或車機待機：只放小白動畫，不講任何行車的事 —— 那時候規劃器的
 aTarget／reason 不是車子實際在做的事，照著顯示會亂講話。
+小白（2026-11-03 使用者：OP 沒接手、平穩行駛要有表情；「不要日期時間，其它照你建議」）：
+  動畫是夥計 11/03 做的，xiaobai_build.py 先算成 xiaobai/*.png。只放在不講安全的畫面：
+  沒接手 → 探頭／散步輪流，待機 → 打瞌睡；平穩行駛 → 全螢幕 6 秒（跳步／聽歌／衝浪輪流）再接原本的文字頁；
+  跟車、省油加速、停止中、前車停止（我們停著）、前方塞車 → 左邊圖示換成小小白，字照舊；
+  謝謝、抱歉 → 鞠躬 4 秒、字 2 秒輪流；led_agent 開起來第一次連上字幕卡、OP 沒接手 → 打招呼一次。
+  減速、彎道、轉彎、換道、前方停車、前車減速／停止／急煞、速限變更都維持原本的圖示。
 YOLO 沒上、OP 分不出紅燈：「前方停車」「停止中」只講車要停，FORBIDDEN 講燈號。
 """
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 KPH = 1 / 3.6
 
-PAGE_SECS = 2.0         # 秒：輪替的每一頁
+PAGE_SECS = 2.0         # 秒：輪替的每一頁（文字頁；小白頁的秒數寫在 Page.secs）
+XB_CRUISE_SECS = 6.0    # 秒：平穩行駛的小白頁，之後接文字頁
+XB_MANUAL_SECS = 4.0    # 秒：謝謝／抱歉的鞠躬頁，之後接 2 秒字
+XB_CRUISE = ["cruise_road", "cruise_music", "cruise_surf"]   # 每輪換下一個（Screen.turn＋第幾輪）
+XB_MANUAL = {"m_thanks": "thanks", "m_sorry": "sorry"}
+HELLO_SECS = 5.0        # 秒：打招呼（等 ENTER 1 秒才上屏、到期後 DEBOUNCE 1 秒才下屏 ＝ 動畫剛好播一次 5 秒）
 MIN_SHOW = 2.0          # 秒：一個畫面至少播這麼久才能被「較輕微」的畫面取代
 MAX_SHOW = 4.0          # 秒：多頁的畫面播完一輪（上限這麼久）才讓位
 DEBOUNCE = 1.0          # 秒：較輕微的新畫面要連續被選中這麼久
@@ -92,7 +103,7 @@ FLOW = {("stop", "stopped"), ("junction", "stopped"), ("junction", "stopped_foll
         ("jam", "lead_launch"), ("jam", "accel")}
 # 前車起步不在裡面：我們幾乎馬上跟著走，直接接續的話只閃 1 秒（9/24 重放 27 次裡 19 次不到 1.5 秒）
 
-SEV = {"clock": -1,
+SEV = {"clock": -1, "hello": 0,
        "cruise": 0, "follow": 0,
        "accel": 1, "catch_up": 1, "stopped": 1, "stopped_follow": 1, "jam": 1,
        "limit_changed": 2, "lead_launch": 2, "slow_ahead": 2,
@@ -104,14 +115,16 @@ SEV = {"clock": -1,
 
 @dataclass
 class Page:
-  """一頁：左邊圖示、上面大字、下面小字（小字空的就只有一行大字）。"""
+  """一頁：左邊圖示、上面大字、下面小字（小字空的就只有一行大字）。
+  icon "xb" ＝ 整面小白動畫（arg 是哪一段；list ＝ 每輪換一個，由 Screen.page 挑），"mini_*" ＝ 左邊小小白。"""
   icon: str
   big: str
   small: str = ""
   color: tuple = (255, 255, 255)
   small_color: tuple | None = None
-  arg: object = None          # 圖示參數（速限牌的數字）
+  arg: object = None          # 圖示參數（速限牌的數字、小白哪一段）
   alert: bool = False         # 整面紅底閃爍
+  secs: float = PAGE_SECS     # 這頁播幾秒
 
 
 WHITE, GREEN, YELLOW, RED, CYAN = (255, 255, 255), (0, 235, 60), (255, 190, 0), (255, 20, 20), (0, 200, 255)
@@ -192,6 +205,7 @@ def nav_params(step):
 class Screen:
   key: str
   params: dict = field(default_factory=dict)
+  turn: int = 0               # 這是第幾次上屏（Director 給）：平穩行駛的小白每次上屏換一段
 
   @property
   def sev(self):
@@ -204,7 +218,15 @@ class Screen:
   def page(self, shown):
     """顯示了 shown 秒時輪到哪一頁。"""
     ps = self.pages
-    return ps[int(shown // PAGE_SECS) % len(ps)]
+    rnd, rest = divmod(shown, sum(p.secs for p in ps))
+    p = ps[-1]                # 浮點誤差掉出最後一頁時
+    for p in ps:
+      if rest < p.secs:
+        break
+      rest -= p.secs
+    if p.icon == "xb" and isinstance(p.arg, list):
+      p = replace(p, arg=p.arg[(self.turn + int(rnd)) % len(p.arg)])
+    return p
 
 
 def _ahead_page(p):
@@ -243,7 +265,11 @@ def road_info(d):
 def pages(s):
   k, p = s.key, s.params
   if k == "clock":
-    return [Page("clock", "")]
+    if p.get("standby"):
+      return [Page("xb", "", arg="idle_nap", secs=6.0)]
+    return [Page("xb", "", arg="idle_peek", secs=12.0), Page("xb", "", arg="idle_wander", secs=14.0)]
+  if k == "hello":
+    return [Page("xb", "", arg="hello", secs=HELLO_SECS)]
   if k == "hard_brake":
     return [Page("none", "前車急煞", "請注意", WHITE, alert=True)]
   if k == "lead_stop":
@@ -281,23 +307,26 @@ def pages(s):
     return [Page("chev_up", "跟上前車", f"前車時速 {p.get('lead_kph', 0)}", GREEN)]
   if k == "stopped_follow":
     d = p.get("dRel")
-    return [Page("car_gray", "前車停止", f"保持距離 {round(d)} M" if d else "保持安全距離", WHITE)]
+    return [Page("mini_wait", "前車停止", f"保持距離 {round(d)} M" if d else "保持安全距離", WHITE)]
   if k == "stopped":
-    return [Page("octagon", "停止中", f"請稍候 {p.get('secs', 0)} 秒", RED)]
+    return [Page("mini_wait", "停止中", f"請稍候 {p.get('secs', 0)} 秒", RED)]
   if k == "follow":
-    return [Page("car", f"跟車 {round(p.get('dRel', 0))}M", f"前車時速 {p.get('lead_kph', 0)}", WHITE)] + _road_page(p)
+    return [Page("mini_follow", f"跟車 {round(p.get('dRel', 0))}M", f"前車時速 {p.get('lead_kph', 0)}", WHITE)] + _road_page(p)
   if k == "accel":
-    return [Page("chev_up", "省油加速", "請稍候", GREEN)] + _ahead_page(p) + _road_page(p)
+    return [Page("mini_accel", "省油加速", "請稍候", GREEN)] + _ahead_page(p) + _road_page(p)
   if k == "cruise":
     # 平穩行駛是最常出現的畫面（9/24-10/12 行車 21.7%），使用者 10/12 覺得單調：知道速限時多輪一頁
     # 本路段速限（只講路的速限，不講自己的車速 —— 9/24「免得別人說我們超速」）
     lim = p.get("limit") or 0
     lim_page = [Page("limit", "本路段速限", f"{lim} 公里", WHITE, arg=lim)] if lim else []
-    return [Page("road", "平穩行駛", "請保持車距", WHITE)] + lim_page + _ahead_page(p) + _road_page(p)
+    xb = [Page("xb", "", arg=XB_CRUISE, secs=XB_CRUISE_SECS)]
+    return xb + [Page("road", "平穩行駛", "請保持車距", WHITE)] + lim_page + _ahead_page(p) + _road_page(p)
   if k == "jam":
-    return [Page("car", "前方塞車", "請保持距離", YELLOW)] + _road_page(p)
+    return [Page("mini_jam", "前方塞車", "請保持距離", YELLOW)] + _road_page(p)
   if k in MANUAL:
     icon, big, small, color, _sticky = MANUAL[k]
+    if k in XB_MANUAL:
+      return [Page("xb", "", arg=XB_MANUAL[k], secs=XB_MANUAL_SECS), Page(icon, big, small, color)]
     return [Page(icon, big, small, color)]
   if k == "nav":
     dist = p.get("dist", 0.0)
@@ -336,6 +365,12 @@ class Director:
     self.nav = None                 # 目前這一步要講的（nav_params），None = 沒在導航或這步不用講
     self.nav_until = 0.0            # 顯示中：到這時候結束
     self.nav_want_until = 0.0       # 觸發了還沒上屏：等到這時候為止
+    self.turns = 0                  # 上屏過幾個畫面（Screen.turn）
+    self.hello_until = 0.0
+
+  def hello(self, now):
+    """led_agent 開起來第一次連上字幕卡時叫一次：OP 沒接手的話小白出來打招呼。"""
+    self.hello_until = now + HELLO_SECS
 
   def nav_update(self, nav, age, now):
     """led_agent 每格餵 hud_agent 寫的導航狀態（nav = NavDash /nav 的內容，age = 幾秒前讀到的）。"""
@@ -405,7 +440,7 @@ class Director:
     sd = _g(d, "selfdriveState", default={})
     if d.get("standby", True) or not sd.get("enabled", False) or "carState" not in d:
       self._reset_drive()
-      return Screen("clock")
+      return Screen("clock", {"standby": True} if d.get("standby", True) else {})
 
     cs, ctl, rs = d["carState"], d.get("control", {}), d.get("radarState", {})
     v = float(cs.get("vEgo", 0.0))
@@ -657,7 +692,10 @@ class Director:
     if self.cur.key in MANUAL and want.key != self.cur.key:
       self._switch(want, now)               # 手動字幕到期或被取消：直接交回，不等 DEBOUNCE
       return self.cur, now - self.cur_since
+    if want.key == "clock" and now < self.hello_until:
+      want = Screen("hello")                         # 開機打招呼：只蓋過 OP 沒接手的小白
     if want.key == self.cur.key:
+      want.turn = self.cur.turn
       self.cur = want                                # 同一個畫面：只更新內容（距離、秒數、時速）
       self.pending_key = None
       return self.cur, now - self.cur_since
@@ -665,7 +703,7 @@ class Director:
       self.pending_key, self.pending_since = want.key, now
     held = now - self.pending_since
     shown = now - self.cur_since
-    min_show = min(MAX_SHOW, max(MIN_SHOW, PAGE_SECS * len(self.cur.pages)))
+    min_show = min(MAX_SHOW, max(MIN_SHOW, sum(pg.secs for pg in self.cur.pages)))
     if self.cur.key == "limit_changed":
       # 使用者定 5 秒（10/11 再提：只看得到 2 秒）。原本 5 秒從速限一變就開始算、上屏後又只受 MIN_SHOW 保護，
       # 9/24-10/10 led.log 80 次裡 27 次 ≤2 秒就被跟車／加速畫面換掉。上屏後 5 秒內只讓更嚴重的畫面插隊。
@@ -686,6 +724,8 @@ class Director:
     return self.cur, now - self.cur_since
 
   def _switch(self, s, now):
+    self.turns += 1
+    s.turn = self.turns
     self.cur, self.cur_since = s, now
     self.pending_key = None
     if s.key == "limit_changed":

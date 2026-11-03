@@ -200,30 +200,45 @@ def ic_limit(d, ox, t, value, blink=False):
   fit_text(d, (ox + 11, 12, ox + 53, 52), str(value), BLACK, max_size=34)
 
 
-WEEK = "一二三四五六日"
+# ---------------------------------------------------------------- 小白（xiaobai_build.py 先算好的圖）
+# 每段一張直條圖（第 i 格在 y = 64*i，6 格／秒、首尾接得起來），用到才讀進來；全部解開約 25 MB。
+# 格數照「全域時間」算，不照這頁顯示了幾秒：同一段下次再出現是接著播，不會每次都從頭跳。
+XB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xiaobai")
+XB_FPS = 6.0
+XB_FROM_START = {"hello", "thanks", "sorry"}   # 一次性的事：從第一格播（照這個畫面顯示了幾秒算）
+_xb_cache = {}
 
 
-def datetime_screen(now, t):
-  """OP 沒接手時：左邊小字日期、右邊大字時間，冒號每秒閃一次。
-  now 為 None＝開機後還沒拿到過車機的可信時間：不畫日期，時間畫 --:--，不顯示錯的。"""
-  img = Image.new("RGB", (W, H), BLACK)
-  d = ImageDraw.Draw(img)
-  f = font(58)
-  if now is None:
-    d.text((78 + (W - 78) / 2, H / 2), "--:--", font=f, fill=GRAY, anchor="mm")
-    return img
-  fit_text(d, (0, 4, 78, 32), f"{now.month}/{now.day}", CYAN, max_size=26)
-  fit_text(d, (0, 32, 78, 60), "週" + WEEK[now.weekday()], CYAN, max_size=24)
-  hh, mm = f"{now.hour:02d}", f"{now.minute:02d}"
-  l, tp, r, b = d.textbbox((0, 0), hh + ":" + mm, font=f, anchor="lt")
-  x = 78 + (W - 78 - (r - l)) / 2 - l
-  y = (H - (b - tp)) / 2 - tp
-  d.text((x, y), hh, font=f, fill=WHITE, anchor="lt")
-  x2 = x + d.textlength(hh, font=f)
-  if (t % 1.0) < 0.5:                        # 冒號每秒閃一次，時與分的位置固定不動
-    d.text((x2, y), ":", font=f, fill=WHITE, anchor="lt")
-  d.text((x2 + d.textlength(":", font=f), y), mm, font=f, fill=WHITE, anchor="lt")
-  return img
+def _xb_strip(key):
+  if key not in _xb_cache:
+    if key.startswith("cruise_road_"):
+      # PiBar 只有 1 GB（11/03 可用 338 MB）：時段換了就放掉別的時段那條（一條解開 5 MB）
+      for k in [k for k in _xb_cache if k.startswith("cruise_road_")]:
+        del _xb_cache[k]
+    try:
+      with Image.open(os.path.join(XB_DIR, f"{key}.png")) as im:
+        _xb_cache[key] = im.convert("RGB")
+    except OSError:
+      _xb_cache[key] = None                    # 圖沒裝好：照樣畫得出東西（見呼叫端），不要讓 led_agent 掛掉
+  return _xb_cache[key]
+
+
+def xb_frame(key, mono):
+  strip = _xb_strip(key)
+  if strip is None:
+    return None
+  i = int(mono * XB_FPS) % (strip.height // 64)
+  return strip.crop((0, 64 * i, strip.width, 64 * i + 64))
+
+
+def xb_scene(arg, now_dt):
+  """平穩行駛的「輕快跳步」依車機時間挑天空；拿不到可信時間就改放聽歌（不猜時段）。"""
+  if arg != "cruise_road":
+    return arg
+  if now_dt is NO_TIME:
+    return "cruise_music"
+  h = now_dt.hour
+  return "cruise_road_" + ("dawn" if 5 <= h < 9 else "day" if 9 <= h < 16 else "dusk" if 16 <= h < 19 else "night")
 
 
 def two_line(d, x0, big, small, color, small_color=None):
@@ -267,6 +282,10 @@ def draw_icon(d, name, t, arg=None):
     ic_lane_change(d, 0, t, right=name == "lane_r")
   elif name == "limit":
     ic_limit(d, 0, t, arg or 0, blink=False)
+  elif name.startswith("mini_"):
+    tile = xb_frame(name, t)
+    if tile is not None:
+      d._image.paste(tile, (0, 0))
   else:
     raise KeyError(name)
 
@@ -276,13 +295,19 @@ def draw_icon(d, name, t, arg=None):
 NO_TIME = object()   # led_agent 傳這個＝拿不到車機的可信時間；None（沒傳）＝示範工具，用本機時間
 
 
-def draw_page(page, t, now_dt=None):
-  """led_director.Page + 秒數（動畫相位）→ 256x64 圖。"""
-  if page.icon == "clock":
-    import datetime
-    if now_dt is NO_TIME:
-      return datetime_screen(None, t)
-    return datetime_screen(now_dt or datetime.datetime.now(), t)
+def draw_page(page, t, now_dt=None, mono=None):
+  """led_director.Page + 秒數（動畫相位）→ 256x64 圖。mono：全域時間，小白的格數照它算（沒給就用 t）。"""
+  if mono is None:
+    mono = t
+  if page.icon == "xb":
+    if now_dt is None:
+      import datetime
+      now_dt = datetime.datetime.now()
+    img = xb_frame(xb_scene(page.arg, now_dt), t if page.arg in XB_FROM_START else mono)
+    if img is None:
+      img = Image.new("RGB", (W, H), BLACK)
+      fit_text(ImageDraw.Draw(img), (0, 0, W, H), "小白", GRAY, max_size=40)
+    return img
   if page.alert:                                   # 整面紅底閃爍，兩行字
     on = (t * 3.0) % 1.0 < 0.55
     img = Image.new("RGB", (W, H), RED if on else BLACK)
@@ -291,13 +316,13 @@ def draw_page(page, t, now_dt=None):
   img = Image.new("RGB", (W, H), BLACK)
   d = ImageDraw.Draw(img)
   x0 = 0
-  if page.icon != "none":
-    draw_icon(d, page.icon, t, page.arg)
+  if page.icon != "none" and not (page.icon.startswith("mini_") and _xb_strip(page.icon) is None):
+    draw_icon(d, page.icon, mono if page.icon.startswith("mini_") else t, page.arg)
     x0 = ICON
   two_line(d, x0, page.big, page.small, page.color, page.small_color)
   return img
 
 
-def draw(screen, t, now_dt=None):
+def draw(screen, t, now_dt=None, mono=None):
   """led_director.Screen + 這個畫面已顯示幾秒 → 256x64 圖（輪到哪一頁由 screen.page 決定）。"""
-  return draw_page(screen.page(t), t, now_dt)
+  return draw_page(screen.page(t), t, now_dt, mono)

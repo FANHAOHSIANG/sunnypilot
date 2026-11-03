@@ -29,8 +29,8 @@ from led_director import MANUAL_FILE, NAV_FILE, Director
 
 HOST_JSON = "http://127.0.0.1:8080/host.json"
 STREAM_PORT = 8902
-FPS = 6.0                 # 控制卡整張重建約 155 ms，6 格／秒剛好
-STREAM_STALE = 3.0        # 秒沒收到串流就當作斷線，畫面回日期時間
+FPS = 6.0                 # 控制卡整張重建約 155 ms，6 格／秒剛好（小白動畫也是照這個速度算的）
+STREAM_STALE = 3.0        # 秒沒收到串流就當作斷線，畫面回待機的小白
 CARD_RETRY = 5.0          # 控制卡推失敗後多久再試
 CARD_TIMEOUT = 1.5
 # 11/02：原本每格都推（6 張／秒，畫面沒變也推），卡偶爾一張超過 CARD_TIMEOUT，連 3 張就判斷線重登 ——
@@ -415,6 +415,7 @@ def main():
   sent_pix, sent_t = None, 0.0                     # 上次推成功的那張圖（像素）和時間（見 KEEPALIVE）
   slow_since = None                                # 從什麼時候開始回得慢（見 CARD_DOWN_AFTER）
   last_key, last_text = None, ""
+  hello_done = False                               # 開起來第一次連上字幕卡：小白打招呼（只一次）
   mirror_next = 0.0
   power_next, power_last = 0.0, None   # Pi supply: logged whenever vcgencmd's flags change
   mirror_setup()
@@ -442,11 +443,11 @@ def main():
       params = json.dumps(screen.params, ensure_ascii=False, default=str)
       v, a = cs.get("vEgo", 0.0), ctl.get("aTarget", 0.0)
       say(f"screen {screen.key:<14} {params} v={v:.1f} a={a:.2f} reason={ctl.get('reason', '')}")
-    if page.icon != "clock" and (screen.key != last_key or _words(text) != _words(last_text)):
+    if page.icon != "xb" and (screen.key != last_key or _words(text) != _words(last_text)):
       say(f"  text {text}")                       # 屏上實際的字（換頁才記，數字變動不記）
     last_key, last_text = screen.key, text
 
-    img = R.draw(screen, shown, car_now() or R.NO_TIME)
+    img = R.draw(screen, shown, car_now() or R.NO_TIME, tick)
     if tick >= mirror_next:                        # HUD 鏡像：跟推給控制卡的是同一張圖
       mirror_next = tick + 1 / MIRROR_FPS
       left = director.manual_left(tick)
@@ -460,6 +461,9 @@ def main():
         led.show(img)
         if card_ok is not True:
           say(f"card up {args.card}")
+          if not hello_done:
+            director.hello(tick)
+            hello_done = True
         elif slow_since is not None:
           say(f"card answering again after {tick - slow_since:.1f} s slow")
         card_ok, sent_pix, sent_t, slow_since = True, pix, tick, None
