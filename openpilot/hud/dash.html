@@ -139,8 +139,10 @@
     padding:6px 13px 6px 9px;border-radius:8px;background:rgba(8,12,16,.82);
     border:1px solid rgba(255,255,255,.10)}
   .lit.on{display:flex}
-  /* 11/01：鎖定中（這一兩秒沒看到燈、保留剛判出的燈色）：燈點不發光、字變淡 */
+  /* 11/01：保持中（這一兩秒沒看到燈、保留剛判出的燈色）：燈點不發光、字變淡 */
   .lit.held .dot{box-shadow:none;opacity:.55} .lit.held .txt{opacity:.6}
+  /* 11/03：C3 新流程鎖住「我們的燈」、燈色是它判的：燈牌加白框 */
+  .lit.locked{border:2px solid rgba(255,255,255,.85)}
   .lit .dot{width:19px;height:19px;border-radius:50%;flex:0 0 auto;margin-top:4px}
   .lit .txt{font-size:22px;font-weight:800;letter-spacing:.3px;line-height:1.25;word-break:keep-all}
   .lit.red .dot{background:#ff2f2f;box-shadow:0 0 18px #ff2f2f} .lit.red .txt{color:#ff5c5c}
@@ -842,27 +844,32 @@ function renderTL(tl, la){
     const what = tl.osm_kind===1 ? '前方行人號誌' : '前方號誌';
     const d = Math.round(tl.osm_m);
     const p=tl.p||[0,0,0];
-    // 11/01：用 tlwatchd 給 HUD 的保留燈色（shown，5 秒）；held＝這一兩秒沒再看到，標「鎖定」並變淡
-    const L = tl.shown || tl.light, hold = tl.held ? '・鎖定' : '';
-    if(tl.mode==='approach' && L==='red'){ cls='red'; txt=`${what} ${d}m 紅燈 ${tl.held?'':pc(p[1])}${hold}`; }
+    // 11/01：用 tlwatchd 給 HUD 的保留燈色（shown，5 秒）；held＝這一兩秒沒再看到，標「保持」並變淡
+    // （11/03 起「鎖」專指 C3 新流程鎖住我們的燈，原本這裡的「鎖定」改叫「保持」）
+    const L = tl.shown || tl.light, hold = tl.held ? '・保持' : '';
+    // 11/03：C3 新流程（c3track）鎖住我們的燈、燈色是它判的 →「鎖」＋白框；鎖住了但它還沒判出燈色 →「已鎖未判」、
+    // 有新流程但沒鎖到燈 →「未鎖」（這兩種燈色都是原本的判法）
+    const lk = tl.src==='trk' ? '鎖 ' : '';     // 它判的燈號不帶百分比（p 是原本判法的把握）
+    const unl = !tl.lock || tl.mode!=='approach' || tl.src==='trk' ? '' : tl.lock.on ? '・已鎖未判' : '・未鎖';
+    if(tl.mode==='approach' && L==='red'){ cls='red'; txt=`${what} ${d}m ${lk}紅燈 ${tl.held||lk?'':pc(p[1])}${hold}${unl}`; }
     // 10/28：C3 只在「看過是綠、同一顆變黃」才報黃燈；light_ahead 第一次看到就決定停（−2.0 內停得下）或通過
     else if(tl.mode==='approach' && L==='yellow'){
       const yd = la && la.yellow==='stop' ? '・停' : la && la.yellow==='go' ? '・通過' : '';
-      cls='amber'; txt=`${what} ${d}m 黃燈 ${tl.held?'':pc(p[3]||0)}${yd}${hold}`; }
-    else if(tl.mode==='approach' && L==='go'){ cls='green'; txt=`${what} ${d}m 綠燈 ${tl.held?'':pc(p[2])}${hold}`; }
-    else if(tl.mode==='approach'){ cls='off'; txt=`${what} ${d}m 判斷中`; }
+      cls='amber'; txt=`${what} ${d}m ${lk}黃燈 ${tl.held||lk?'':pc(p[3]||0)}${yd}${hold}${unl}`; }
+    else if(tl.mode==='approach' && L==='go'){ cls='green'; txt=`${what} ${d}m ${lk}綠燈 ${tl.held||lk?'':pc(p[2])}${hold}${unl}`; }
+    else if(tl.mode==='approach'){ cls='off'; txt=`${what} ${d}m ${lk}判斷中${unl}`; }
     else { cls='off'; txt=`${what} ${d}m`; }
   }
   if(tl.held && tl.mode==='approach' && cls!=='off') cls+=' held';
-  // 11/01：停等時燈色是逐格判的，漏看一兩格就跳回「判斷中」→ 剛判出的紅／綠留 5 秒、標「鎖定」變淡
-  if(cls && cls!=='off' && !/鎖定/.test(txt)) tlLastLit={cls:cls.replace(' held',''), txt, t:Date.now(), mode:tl.mode};
+  // 11/01：停等時燈色是逐格判的，漏看一兩格就跳回「判斷中」→ 剛判出的紅／綠留 5 秒、標「保持」變淡
+  if(cls && cls!=='off' && !/保持/.test(txt)) tlLastLit={cls:cls.replace(' held',''), txt, t:Date.now(), mode:tl.mode};
   else if(cls==='off' && /判斷中/.test(txt) && tlLastLit && tlLastLit.mode===tl.mode && Date.now()-tlLastLit.t<5000){
-    cls=tlLastLit.cls+' held'; txt=tlLastLit.txt.replace(/ \d+%/,'')+'・鎖定'; }
+    cls=tlLastLit.cls+' held'; txt=tlLastLit.txt.replace(/ \d+%/,'')+'・保持'; }
   if(!txt){ if(tlAt){ box.className='ov lit'; tlAt=0; } return; }
   tlAt=Date.now();
-  box.className='ov lit on '+cls;
+  box.className='ov lit on '+cls+(tl.src==='trk' && tl.mode==='approach' ? ' locked' : '');
   // 10/25：燈色改由 C3 判（C4 不再跑看燈模型），C3 沒資料時才退回 C4 自己的 → 標出這次是誰判的
-  const src = tl.src==='c3' ? '・C3' : '';
+  const src = (tl.src==='c3' || tl.src==='trk') ? '・C3' : '';
   // 字放大後會折行：CSS 用 keep-all 不在字中間斷，「・」後面補零寬空白讓它可以在那裡換行（10/27）
   document.getElementById('litTxt').textContent=(txt+src+(tl.mode==='approach'?act:'')).replace(/・/g, '・\u200b');
 }

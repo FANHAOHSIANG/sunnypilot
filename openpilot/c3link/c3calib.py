@@ -57,11 +57,17 @@ import numpy as np
 import cereal.messaging as messaging
 from common.transformations.orientation import euler_from_rot
 
+from c3track import EgoIntegrator
+
 LISTEN = ("0.0.0.0", 4410)
 C4 = ("10.44.0.2", 4411)
 DET = "/dev/shm/c3det/det.json"
 VOICE = "/dev/shm/c3voice.json"   # c3voice.py: what C3's mic heard and what came of it (res)
 STATE = "/dev/shm/c3calib.json"
+# 11/03: the car's dead-reckoned pose (C4's vEgo + C3's gyro), C3's camera basis and C4's extras (blinkers, OSM signal
+# ahead, radar points) for c3lights' light follower (c3track.py), 5 times a second
+EGO = "/dev/shm/c3ego.json"
+EGO_EVERY = 0.2
 CALIB_FILE = "/data/c3link/calib.json"
 CALIB_LOG = "/data/c3link/calib.log"   # every change of status / basis / link, and once a minute while driving
 LOG_MAX = 1_000_000                     # bytes, then one rotation to calib.log.1
@@ -191,10 +197,14 @@ class Calibrator:
     return None, None
 
   def add_c4(self, pkt, recv_ns):
+    """-> the new (t_ns C3 clock, vEgo) samples."""
     self.offsets.append(recv_ns - pkt["s"])
     off = min(self.offsets)             # C4 -> C3 clock, latency floor
+    new = []
     for t, v, a in pkt["cs"]:
       self.cs.append((t + off, v, a))
+      new.append((t + off, v))
+    return new
 
   def trim(self, now_ns):
     lim = now_ns - int(WINDOW_S * 1e9)
@@ -322,6 +332,7 @@ def main():
   last_seen = 0.
   prev_frame = []
   logged, last_log = None, 0.
+  ego, ego_t, tl_extra, tl_t = EgoIntegrator(), 0., None, 0.
   last_acc = last_sensord_kick = time.monotonic()
   while True:
     sm.update(50)
@@ -339,12 +350,20 @@ def main():
       e = sm["gyroscope"]
       if e.which() == "gyroUncalibrated" and len(e.gyroUncalibrated.v) == 3:
         cal.gyro.append((sm.logMonoTime["gyroscope"], *dev_from_imu(*e.gyroUncalibrated.v)))
+        basis_g, _ = cal.basis()
+        if basis_g is not None:          # turning rate about the car's down axis (+ right), for the light follower
+          v_now = cal.cs[-1][1] if cal.cs and time.monotonic() - last_c4 < 2 else None
+          ego.gyro(sm.logMonoTime["gyroscope"] / 1e9, float(np.asarray(basis_g)[2] @ np.array(cal.gyro[-1][1:])), v_now)
     try:
       while True:
         data, _ = rx.recvfrom(65536)
-        cal.add_c4(json.loads(data), boot_ns())
+        pkt = json.loads(data)
+        for t_ns, v_s in cal.add_c4(pkt, boot_ns()):
+          ego.speed(t_ns / 1e9, v_s)
+        if isinstance(pkt.get("tl"), dict):
+          tl_extra, tl_t = pkt["tl"], time.monotonic()
         last_c4 = time.monotonic()
-    except (BlockingIOError, ValueError, KeyError):
+    except (BlockingIOError, ValueError, KeyError, TypeError):
       pass
 
     now = time.monotonic()
@@ -383,6 +402,12 @@ def main():
       v_c4 = round(float(cal.cs[-1][1]), 2) if cal.cs and now - last_c4 < 2 else None
       write_json(STATE, dict(cal.state, driving=now - last_c4 < 5, t=now, v=v_c4, lights=last_lights[0] if fresh else []))
 
+    if now - ego_t >= EGO_EVERY and now - last_c4 < 5:
+      ego_t = now
+      basis_e, _ = cal.basis()
+      write_json(EGO, {"tb": round(boot_ns() / 1e9, 3), **ego.dump(),
+                       "basis": None if basis_e is None else np.asarray(basis_e).round(6).tolist(),
+                       "tl": tl_extra if tl_extra is not None and now - tl_t < 1. else None})
     if now - last_send >= 0.5:
       last_send = now
       basis, using = cal.basis()
@@ -399,6 +424,8 @@ def main():
                     "det_err": det.get("err", "")})
         # stopped: the pinned head's reading (c3pin, 11/03) - tlwatchd's GO at a wait looks at this head only
         msg["pin"] = det.get("pin") if not det.get("idle") else None
+        # moving: the light follower's locked head and its call (c3track, 11/03) - tlwatchd's light while it has one
+        msg["trk"] = det.get("trk") if not det.get("idle") else None
         if det.get("ts") != det_ts:
           det_ts = det.get("ts")
           if basis is not None and not det.get("idle"):

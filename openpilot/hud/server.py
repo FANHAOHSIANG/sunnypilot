@@ -60,6 +60,27 @@ KPH_TO_MS = 1 / 3.6
 C3_ADDR = ("10.44.0.1", 4410)
 C3_BATCH_S = 0.1
 
+
+
+def _c3_tl(sm, radar_points):
+  """What C3's light follower (c3link/c3track.py, 11/03) needs from C4, riding on the calibration packet: the blinkers,
+  tlwatchd's OSM signal ahead (m, None) and the radar's points (dRel, yRel left +, vRel) - a lamp on a moving one is a
+  vehicle's, not a signal head. Nothing new reads carState: this loop already does."""
+  try:
+    out = {"bl": bool(sm["carState"].leftBlinker), "br": bool(sm["carState"].rightBlinker), "osm": None,
+           "rad": [[round(p["dRel"], 1), round(p["yRel"], 2), round(p["vRel"], 2)] for p in radar_points[:48]]}
+  except Exception:  # never let C3's extras cost the calibration packet
+    return None
+  try:
+    with open("/dev/shm/tlwatch.json") as f:
+      tl = json.load(f)
+    if time.monotonic() - float(tl.get("t", 0)) < 1.5:
+      out["osm"] = tl.get("osm_m")
+  except (OSError, ValueError, TypeError):
+    pass
+  return out
+
+
 # Whether the C4 is plugged into the car (the panda's harness), for car_hotspot.py, which picks the network by it.
 # Written here because this process is openpilot's user: car_hotspot runs as root before openpilot is up, and its
 # own pandaStates reader made /dev/shm/msgq_pandaStates root's - openpilot then failed to open it on every boot.
@@ -450,7 +471,7 @@ def _produce():
       if now - c3_last >= C3_BATCH_S:
         if c3_cs:
           try:
-            c3_tx.sendto(json.dumps({"s": time.clock_gettime_ns(time.CLOCK_BOOTTIME), "cs": c3_cs},
+            c3_tx.sendto(json.dumps({"s": time.clock_gettime_ns(time.CLOCK_BOOTTIME), "cs": c3_cs, "tl": _c3_tl(sm, radar_points)},
                                     separators=(",", ":")).encode(), C3_ADDR)
           except OSError:
             pass

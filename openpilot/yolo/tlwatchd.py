@@ -78,11 +78,11 @@ import numpy as np
 
 import yolo_core as yc
 
-BASE = Path('/data/tlwatch')
+BASE = Path(os.environ.get('TLW_BASE', '/data/tlwatch'))
 ENABLE = BASE / 'ENABLE'
 DISABLE = BASE / 'DISABLE'
 C3_GO = BASE / 'C3_GO'          # GO on C3's call is pressed only with this too (see the top)
-C3_FILE = '/dev/shm/c3lights.json'
+C3_FILE = os.environ.get('TLW_C3_FILE', '/dev/shm/c3lights.json')   # env: verify_tlwatch_trk.py runs an isolated copy
 C3_FRESH_S = 1.5                # c3_relay rewrites it twice a second while C3 sends
 C3_AZ_DEG = 12.0                # the HUD's "in front" for C3's lights
 LAMP_VEHICLE_P = 0.5            # the arrow model's 'vehicle' at which a head counts as a vehicle signal (c3_read)
@@ -120,7 +120,12 @@ CLS_ONLY_P = 0.85   # 0.85 and 0.9 score the same offline (1 early / 29 released
 CLS_ONLY_RUN = 3
 GO_SHOW = 3.0        # s the HUD shows a GO for
 SIGNALS = '/data/media/0/osm/tw_signals.npy'
-STATE = '/dev/shm/tlwatch.json'
+STATE = os.environ.get('TLW_STATE', '/dev/shm/tlwatch.json')
+# C3's light follower (c3link/c3track.py, 2026-11-03): it tracks the heads across frames, keeps the fixed ones (and none
+# riding on a moving radar target), locks OUR head and reads it in the order green -> yellow -> red -> green. Offline on
+# 109 eye-judged approaches (2674 frames) its calls were right 99.6%, red called go 0 - the window rule (c3_read) 72.7%
+# and 14. While it has our head locked and a call, that is the light (LightCall direct); otherwise the old read.
+TRK_MAX_AGE = 1.5     # s: a follower result older than this (C3's own clock, 'age') is not used
 AHEAD_RANGE = 250.0  # m: how far ahead to look for a signal
 CROSS_M = 20.0       # m either side of the heading a node may sit and still be on our road
 APPROACH_M = 160.0   # m: inside this of a signal ahead, read the light while moving
@@ -216,8 +221,18 @@ class LightCall:
     self.call, self.until = 'unknown', 0.
     self.shown, self.shown_until, self.confirmed_t = 'unknown', 0., -1e9
     self.held = False
+    self.src = None         # 'trk' while C3's follower decides (direct), else the window read
 
-  def update(self, p, t):
+  def update(self, p, t, direct=None):
+    """direct (C3's follower has our head locked and a call - trk_direct): taken as it is, already in order and
+    confirmed there; held as any call (LIGHT_HOLD / LIGHT_HOLD_STOP) once it stops coming."""
+    if direct is not None:
+      self.src, self.last = 'trk', None
+      self.call, self.until = direct, t + (LIGHT_HOLD if direct == 'go' else LIGHT_HOLD_STOP)
+      self.shown, self.shown_until, self.confirmed_t = direct, t + LIGHT_SHOW_HOLD, t
+      self.held = False
+      return self.call
+    self.src = 'c3' if self.src == 'trk' else self.src
     yellow = len(p) > 3 and p[3] >= LIGHT_P
     c = 'red' if p[1] >= LIGHT_P else ('yellow' if yellow else ('go' if p[2] >= LIGHT_P else None))
     if c is not None and c == self.last:
@@ -295,6 +310,38 @@ def c3_read(now, osm_m=None):
               for lt in veh if float(lt.get('h') or 0) >= big)
   # no vehicle head among those read (c3lights reads only the biggest - LAMP_MIN_FRAC): the red stays as it was
   return [round(1. - max(red, go, yellow), 3), round(red, 3), round(go, 3), round(yellow, 3)]
+
+
+def c3_trk(now):
+  """C3's light follower this cycle (c3link/c3track.py via c3calib / c3_relay) or None (no C3, an older C3, stale)."""
+  try:
+    with open(C3_FILE) as f:
+      j = json.load(f)
+  except (OSError, ValueError):
+    return None
+  trk = j.get('trk')
+  if now - float(j.get('t', 0)) > C3_FRESH_S or j.get('idle') or not isinstance(trk, dict):
+    return None
+  if float(trk.get('age', 99)) > TRK_MAX_AGE:
+    return None
+  return trk
+
+
+def trk_direct(trk):
+  """LightCall's direct from the follower: its call while it has our head locked and a call for it, else None - then
+  the window read (c3_read) decides as before, so nothing is read less often than before (the driver). Offline on
+  the 109 judged approaches: called 70.5% (window alone 66.4%), right 87.8% (71.5%), red called go 10 (15) - those 10
+  all the window read's, where no head was locked; the follower's own calls: 99.6% right, 0 red called go."""
+  if trk is None or trk.get('ours') is None or trk.get('call') not in ('red', 'go', 'yellow'):
+    return None
+  return trk['call']
+
+
+def trk_log(trk):
+  """The follower's result for the approach / look logs."""
+  if trk is None:
+    return None
+  return {k: trk.get(k) for k in ('ours', 'call', 'read', 'pos', 'az', 'el', 'osm', 'age', 'ms')}
 
 
 def c3_pin(now):
@@ -544,6 +591,7 @@ def main():
   # off in the same instant - the driver has to see the moment it called, not just that it did
   go_shown = (-1e9, False, False)
   c3p = None                # C3's call this cycle (live only; replays are C4's models)
+  trk = None                # C3's light follower this cycle (live only)
   while True:
     try:
       if a.replay:
@@ -574,6 +622,7 @@ def main():
         t = time.monotonic()
         tag = datetime.now().strftime('%H:%M:%S')
         c3p = c3_read(t, osm_m)   # C3's call on the light, or None -> C4's own models (see the top)
+        trk = c3_trk(t)           # C3's light follower: its call while it has our head locked (trk_direct)
         thermal = sm['deviceState'].thermalStatus
         if thermal == Thermal.critical:
           wait = None
@@ -616,7 +665,10 @@ def main():
                               if now - go_shown[0] < GO_SHOW else None),
                        # whether a GO from whoever is looking now would be pressed (C3's needs C3_GO too)
                        'enable': ENABLE.exists() and (c3p is None or C3_GO.exists()),
-                       'src': 'c3' if c3p is not None else 'c4'})
+                       'src': 'trk' if light.src == 'trk' else 'c3' if c3p is not None else 'c4',
+                       # the follower (HUD "鎖"): None = no follower (older C3 / no C3); on = our head locked
+                       'lock': None if trk is None else {'on': trk.get('ours') is not None, 'call': trk.get('call'),
+                                                         'x': (trk.get('pos') or [None])[0]}})
 
       stopped = st['v'] < STOPPED
       quiet = stopped and st['en'] and not st['brake'] and st['lead'] > LEAD_NEAR
@@ -648,8 +700,8 @@ def main():
           look['why'] = why
           if c3p is not None:        # C3 is looking: no frame, no model here
             p_last = c3p
-            light.update(p_last, t)
-            look['rows'].append({'t': round(t - look['t0'], 2), 'p': p_last, 'why': why, 'src': 'c3'})
+            light.update(p_last, t, trk_direct(trk))
+            look['rows'].append({'t': round(t - look['t0'], 2), 'p': p_last, 'why': why, 'src': 'c3', 'trk': trk_log(trk)})
             time.sleep(0.5)
             continue
           if not a.replay:
@@ -675,10 +727,11 @@ def main():
           if st['v'] >= MOVING and osm_m is not None and osm_m <= APPROACH_M and c3p is not None:
             # coming up to a signal, C3 looking: its call, report only
             p_last = c3p
-            light.update(p_last, t)
+            light.update(p_last, t, trk_direct(trk))
             appr_log.write(json.dumps({'t': round(t, 2), 'wall': tag, 'v': round(float(st['v']), 2),
                                        'osm_m': round(osm_m, 1), 'kind': osm_kind, 'p': p_last, 'call': light.call,
-                                       'lead': round(float(st['lead']), 1), 'en': bool(st['en']), 'src': 'c3'}) + '\n')
+                                       'lead': round(float(st['lead']), 1), 'en': bool(st['en']), 'src': 'c3',
+                                       'trk': trk_log(trk), 'by': light.src}) + '\n')
             time.sleep(0.5)
           elif st['v'] >= MOVING and osm_m is not None and osm_m <= APPROACH_M:
             # coming up to a signal: read the light, report only

@@ -48,6 +48,7 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
+import c3track
 from c3pin import StopPin
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +71,9 @@ THREADS = int(os.environ.get('C3_THREADS', '4'))
 ALWAYS = os.environ.get('C3_ALWAYS', '0') == '1'      # testing: run whether or not the car is driving
 OUT_DIR = '/dev/shm/c3det'
 CALIB = '/dev/shm/c3calib.json'
+EGO = '/dev/shm/c3ego.json'        # c3calib: pose (C4 speed + C3 gyro), camera basis, C4's extras - the light follower's
+EGO_FRESH_S = 1.0
+TRK = os.environ.get('C3_TRK', '1') == '1'   # the light follower (c3track, 11/03); C3_TRK=0 leaves it out
 FULL_W, FULL_H = 1928, 1208        # ar0231
 DISP_W, DISP_H = 964, 604          # half resolution: det.json's coordinates (c3calib's FOCAL / CX / CY)
 BAND_H, BAND_W = 704, 1248         # the finder's input, no resize; columns centred on straight ahead (see the top)
@@ -204,29 +208,34 @@ def lamps(sess, frame, boxes):
   if sess is None or not boxes:
     return None
   img = Image.fromarray(frame)
-  name = sess.get_inputs()[0].name
   hmax = max(y2 - y1 for _, y1, _, y2 in boxes)
   # tlwatchd only looks at the biggest heads - see LAMP_MIN_FRAC
   big = sorted(range(len(boxes)), key=lambda i: boxes[i][1] - boxes[i][3])[:LAMP_MAX_N]
   out = []
-  for i, (x1, y1, x2, y2) in enumerate(boxes):
-    if i not in big or y2 - y1 < LAMP_MIN_FRAC * hmax:
+  for i, b in enumerate(boxes):
+    if i not in big or b[3] - b[1] < LAMP_MIN_FRAC * hmax:
       out.append(None)
       continue
-    pad = 0.25 * max(x2 - x1, y2 - y1) + 3
-    c = img.crop((int(x1 - pad), int(y1 - pad), int(x2 + pad), int(y2 + pad)))   # outside the frame comes in black, as trained
-    s = 144 / max(c.size)
-    c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.LANCZOS)
-    s = 96 / max(c.size)
-    c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.BILINEAR)
-    lb = Image.new('RGB', (96, 96), (0, 0, 0))
-    lb.paste(c, ((96 - c.size[0]) // 2, (96 - c.size[1]) // 2))
-    x = ((np.asarray(lb, np.float32) / 255. - LAMP_MEAN) / LAMP_STD).transpose(2, 0, 1)[None].astype(np.float32)
-    y = sess.run(None, {name: x})[0][0]
-    if y.min() < 0 or y.max() > 1:
-      y = 1. / (1. + np.exp(-y))
-    out.append({k: round(float(v), 3) for k, v in zip(LAMP_OUTS, y, strict=True)})
+    out.append(lamp_one(sess, img, b))
   return out
+
+
+def lamp_one(sess, img, box):
+  """The arrow model on one box of a PIL image (lamps())."""
+  x1, y1, x2, y2 = box
+  pad = 0.25 * max(x2 - x1, y2 - y1) + 3
+  c = img.crop((int(x1 - pad), int(y1 - pad), int(x2 + pad), int(y2 + pad)))   # outside the frame comes in black, as trained
+  s = 144 / max(c.size)
+  c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.LANCZOS)
+  s = 96 / max(c.size)
+  c = c.resize((max(1, round(c.size[0] * s)), max(1, round(c.size[1] * s))), Image.BILINEAR)
+  lb = Image.new('RGB', (96, 96), (0, 0, 0))
+  lb.paste(c, ((96 - c.size[0]) // 2, (96 - c.size[1]) // 2))
+  x = ((np.asarray(lb, np.float32) / 255. - LAMP_MEAN) / LAMP_STD).transpose(2, 0, 1)[None].astype(np.float32)
+  y = sess.run(None, {sess.get_inputs()[0].name: x})[0][0]
+  if y.min() < 0 or y.max() > 1:
+    y = 1. / (1. + np.exp(-y))
+  return {k: round(float(v), 3) for k, v in zip(LAMP_OUTS, y, strict=True)}
 
 
 class YellowGate:
@@ -303,11 +312,48 @@ class Reader:
                                # head the finder did not box): find again at once instead of after FIND_EVERY_S
     # stopped: the head that stopped us, pinned and read on its own (c3pin, 11/03) -> det.json 'pin' for tlwatchd
     self.pin = StopPin((lambda rgb, boxes: lamps(self.lamp, rgb, boxes)) if self.lamp is not None else None)
+    # moving: follow the heads, lock ours, read it in order (c3track, 11/03) -> det.json 'trk' for tlwatchd
+    self.fol = c3track.Follower() if TRK else None
+    self.trk = None
+
+  def follow(self, t_frame, rgb, r0, local, probs, lp):
+    """The light follower on this finder cycle (c3track): its own lamp reads on the boxes it may track (lamp_idx; the
+    ones lamps() read for det.json are reused), the pose / camera / C4 extras from c3calib (EGO). -> det.json 'trk'."""
+    if self.fol is None:
+      return None
+    t0 = time.perf_counter()
+    boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+    ego = load_ego(boot)
+    if ego is None:
+      self.fol.reset()
+      return None
+    if t_frame is None or abs(t_frame - boot) > 2.:
+      t_frame = boot
+    boxes, scores = self.boxes, self.scores
+    lam = list(lp) if lp else [None] * len(boxes)
+    if self.lamp is not None:
+      img = None
+      for i in c3track.lamp_idx(boxes, scores, ego.cam, must=self.fol.ours_near(t_frame, ego, boxes)):
+        if lam[i] is None:
+          img = Image.fromarray(rgb) if img is None else img
+          lam[i] = lamp_one(self.lamp, img, local[i])
+    dets = [c3track.Det(boxes[i], scores[i], {k: float(p) for k, p in zip(CLS_NAMES, probs[i], strict=True)}, lam[i], ego.cam)
+            for i in c3track.dedupe(boxes, scores)]
+    tl = ego.tl
+
+    def lamp_fn(b):
+      return lamp_one(self.lamp, Image.fromarray(rgb), (b[0], b[1] - r0, b[2], b[3] - r0)) if self.lamp is not None else None
+    r = self.fol.step(t_frame, dets, ego, osm=tl.get('osm'), blink=(bool(tl.get('bl')), bool(tl.get('br'))),
+                      radar=tl.get('rad'), crop=lambda b: c3track.crop_box(rgb, r0, b), lamp_fn=lamp_fn)
+    r.update({'t': round(t_frame, 3), 'ms': round((time.perf_counter() - t0) * 1000),
+              'box': None if r['box'] is None else [round(v / 2, 1) for v in r['box']]})   # det.json's half res
+    self.trk = r
+    return r
 
   def tracking(self, now, stopped):
     return stopped and bool(self.boxes) and now - self.t_find < FIND_EVERY_S and not self.went_dark
 
-  def step(self, rows, row0, col0, now, stopped, horizon=None, ahead=None):
+  def step(self, rows, row0, col0, now, stopped, horizon=None, ahead=None, t_frame=None):
     t0 = time.perf_counter()
     # c3pin's straight ahead / horizon, full res (c3calib's are half res; none yet -> the band's defaults)
     hv = 2 * float(horizon) if horizon is not None else ROW0_DEFAULT + BAND_ABOVE
@@ -323,7 +369,7 @@ class Reader:
       self.went_dark = not dets and self.n_shown > 0     # every tracked light dark: whatever is lit now is elsewhere
       pin = self.pin.update(now, stopped, self.boxes, probs, lp, rgb, r0, hv, au)
       return dets, {'mode': 'track', 'found': len(self.boxes), 'dropped': dropped, 'det_ms': 0,
-                    'cls_ms': round((time.perf_counter() - t0) * 1000), 'pin': pin}
+                    'cls_ms': round((time.perf_counter() - t0) * 1000), 'pin': pin, 'trk': trk_aged(self.trk)}
     rgb, r0 = rows(row0, row0 + BAND_H)
     band = np.ascontiguousarray(rgb[row0 - r0:row0 - r0 + BAND_H, col0:col0 + BAND_W])
     found = find(self.det, band)
@@ -336,8 +382,36 @@ class Reader:
     dets, dropped = dets_from(self.boxes, self.scores, probs, self.gate, now, lp)
     self.n_shown, self.went_dark = len(dets), False
     pin = self.pin.update(now, stopped, self.boxes, probs, lp, rgb, r0, hv, au)
+    t2 = time.perf_counter()
+    try:
+      trk = self.follow(t_frame, rgb, r0, local, probs, lp)
+    except Exception as e:  # the follower must never stop the lights
+      print('c3lights: follower error', repr(e)[:200], flush=True)
+      self.fol, self.trk, trk = (c3track.Follower() if TRK else None), None, None
     return dets, {'mode': 'find', 'found': len(found), 'dropped': dropped, 'det_ms': round((t1 - t0) * 1000),
-                  'cls_ms': round((time.perf_counter() - t1) * 1000), 'pin': pin}
+                  'cls_ms': round((t2 - t1) * 1000), 'pin': pin, 'trk': trk_aged(trk)}
+
+
+def trk_aged(trk):
+  """det.json 'trk' with its age (s since its frame, C3's boot clock) - tlwatchd leaves an old one alone."""
+  if trk is None:
+    return None
+  return dict(trk, age=round(time.clock_gettime(time.CLOCK_BOOTTIME) - trk['t'], 2))
+
+
+def load_ego(boot_now):
+  """c3calib's EGO -> c3track.Ego (cam and C4's extras attached), or None while it is stale / has no camera basis or
+  C4 sent no extras (an older C4: no OSM, no blinkers - the follower would only guess)."""
+  try:
+    with open(EGO) as f:
+      j = json.load(f)
+  except (OSError, ValueError):
+    return None
+  if boot_now - float(j.get('tb', 0)) > EGO_FRESH_S or not j.get('basis') or len(j.get('t') or []) < 2 or not j.get('tl'):
+    return None
+  ego = c3track.Ego(j['t'], j['v'], j['n'], j['e'], j['hd'])
+  ego.cam, ego.tl = c3track.Cam(j['basis']), j['tl']
+  return ego
 
 
 def nv12_rgb(buf, r0, r1):
@@ -443,7 +517,8 @@ def main():
       continue
     last_out = now
     row0, col0 = band_row0(horizon), band_col0(ahead)
-    dets, st = reader.step(lambda a, b, buf=buf: nv12_rgb(buf, a, b), row0, col0, now, stopped, horizon, ahead)
+    t_frame = client.timestamp_sof / 1e9 if client.timestamp_sof else None    # boot clock, as c3calib's pose
+    dets, st = reader.step(lambda a, b, buf=buf: nv12_rgb(buf, a, b), row0, col0, now, stopped, horizon, ahead, t_frame)
     t_end = time.monotonic()
     dt = t_end - t_last
     t_last = t_end
