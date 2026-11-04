@@ -184,6 +184,13 @@ class DesireHelper:
       elif self.turn_go is None:
         if _turn_due(d_nav, v_ego):
           self.turn_go = 'nav'
+        elif (routing or nav is not None) and (d_nav is None or d_nav > HOLD_NAV_M):
+          # 11/04 (the driver: "轉彎沒有照導航"): following a route with no turn of its own on that side within HOLD_NAV_M,
+          # the blinker is not OSM's / the memory's junction (the 11/01 rule above, which only the hold had followed).
+          # Logged blinkers while routing (10/31, 11/02, 11/04): 11 got a turn from OSM so; 7 were no turn at all (the
+          # driver steered 31-62% against it), 4 were turns - 2 with lateral off, 1 the route's own turn 210 m on (its
+          # desire comes when due), 1 off the route (10/31 17:52, now steered by hand).
+          pass
         elif mem == 'lane':
           pass                             # a lane change here before
         elif mem == 'turn' and (_turn_due(d_osm, v_ego) if d_osm is not None else
