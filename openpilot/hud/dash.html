@@ -386,8 +386,9 @@
   .ahead .slnx .v{width:38px;height:38px;font-size:17px;border-width:3px}
   .arow{gap:8px}
   .arow .stop{margin-left:auto;flex:0 0 auto;gap:1px}
-  .ahead .oct{width:36px;height:36px;font-size:11px}
-  .ahead .oct-d{margin-top:0;font-size:18px;white-space:nowrap}
+  /* 11/05 使用者：「STOP 的太小了」→ 36 → 50（速限牌 56 旁邊才看得到） */
+  .ahead .oct{width:50px;height:50px;font-size:14px}
+  .ahead .oct-d{margin-top:0;font-size:20px;white-space:nowrap}
   .ahead{padding:6px 10px;gap:6px}
   /* 號誌燈號、C3 的燈已經在前方卡裡，不再自己一層框 */
   .ahead .lit, .ahead .c3l{max-width:none;padding:0;background:none;border:none;gap:7px}
@@ -396,8 +397,8 @@
   .sideR.nonav .ahead .sl{width:100px;height:100px;font-size:46px;border-width:8px}
   .sideR.nonav .ahead .slnx{flex-direction:column}
   .sideR.nonav .ahead .slnx .v{width:52px;height:52px;font-size:23px;border-width:4px}
-  .sideR.nonav .ahead .oct{width:54px;height:54px;font-size:15px}
-  .sideR.nonav .ahead .oct-d{font-size:24px}
+  .sideR.nonav .ahead .oct{width:80px;height:80px;font-size:21px}
+  .sideR.nonav .ahead .oct-d{font-size:28px}
   .sideR.nonav .ahead .sl.d3{font-size:38px}
   .sideR.nonav .ahead .lit .txt{font-size:25px}
   /* 路面正上方的訊息：警示框＋提示（橫排），以路面中線置中 */
@@ -1019,6 +1020,8 @@ function render(F){
   const slText = slRaw>0 ? slRaw : (F.slState==='nofix' ? '無定位' : F.slState==='nodata' ? '無圖資' : '--');
   sl.textContent = slText;
   sl.className = 'sl' + (slRaw>0 ? (slRaw>=100 ? ' d3' : '') : (typeof slText==='string' && slText.length>2 ? ' off txt' : ' off'));
+  // 11/05 使用者：「速限圖示如果該路段沒資料就不要顯示」→ 沒有速限值（無圖資／無定位／還沒資料）整個收起來
+  sl.style.display = slRaw>0 ? '' : 'none';
   const ss=$('slSrc'); if(ss) ss.className = 'slsrc' + ((F.slOff && slRaw>0) ? ' on' : '');
   const nx=$('slNx');
   if(F.slNext>0){
