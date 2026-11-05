@@ -133,3 +133,18 @@ A read-only pure-Python Cap'n Proto message framing/list parser (without externa
 **Status:** OEM FCA status bytes and lack of TX `0x160` are concrete, but do not establish physical AEB intervention. User reports AEB triggered on this route; this is not yet independently confirmed. The strongest next evidence is the *distinct* segment 0 RLOG, event timestamp, and OEM ECU/DTC plus brake actuation evidence.
 
 Do not copy or deploy `create_tcs_messages`, `create_acc_control_scc2`, or altered Panda Safety to public-road use without a qualified safety review and closed-course testing.
+
+### Direct re-decode of earlier sunnypilot route for side-by-side (2026-11-06)
+
+Independently re-decoded the uploaded `99411088c9cfd064_0000004f--858ff9d82b--0--rlog.zst` (101,306 Cap'n Proto messages) with the same read-only CAN extraction used above:
+
+| CAN observation | sunnypilot 0000004f seg 0 | carrot 00000384 seg 1 |
+| --- | --- | --- |
+| RX 0x160 bus 2, raw AEB_SETTING | 3,047 frames, all **3** | 3,001 frames, all **3** |
+| TX 0x160 bus 0, raw AEB_SETTING | 2,486 frames, all **1** | **0** frames |
+| RX TCS bus 0, FCA_EquipSta / FCA_AvlblSta | 3,049 frames, all **1 / 0** | 3,001 frames, all **1 / 0** |
+| TX SCC_CONTROL bus 0 | 2,486 frames | 2,993 frames |
+| Mean wheel speed range | 0–0.039 km/h (nearly parked) | 0–7.64 km/h |
+| ESP_STATUS BRAKE_PRESSURE | 0 throughout | 0–213 raw |
+
+The two segments differ in driving state and are not a matched on-road A/B test. In particular, **both** show received 0x160 raw=3 and FCA availability 0; the strongest differentiator is sunnypilot's **additional** outgoing raw=1 0x160 frame. No physical AEB function can be inferred from either segment. DBC enum labels are not independently verified against Hyundai service documentation.
