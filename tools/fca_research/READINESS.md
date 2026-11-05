@@ -160,3 +160,17 @@ What is supported:
 - The available RLOG may not include the exact FCW moment. Correlate the user's event time with logs before attributing it to stock FCW versus openpilot FCW.
 
 **Deployment gate remains blocked** for claims of OEM AEB preservation. Do not deliberately induce an FCW or AEB event on public roads. Do not suppress warning messages, forge OEM availability, or weaken Panda Safety.
+
+## 2026-11-06: Distinct 00000384 segment 0 recovered and analyzed
+
+User uploaded a new `rlog.zst 12` file, SHA-256 `c823be18d733f09b60b71114513d9068eab3b01cd02d95e76fe640ee93fe1b72`, **distinct** from the prior segment 1 SHA-256 `0d9cc06f2c9ef8b21eee1149067711e52670e68f6a1fba0f45eebfe8a8337049`. Zstandard integrity passed; decompressed 54,007,792 bytes, 86,697 Cap'n Proto messages. CAN monotonic time range **50.922–112.192 seconds**, immediately followed by segment 1 CAN time range **112.203–172.053 seconds**. This establishes that the new file is the preceding segment **0**. Both are from `test/iphone-led-bridge-20261105`, commit `a825bccd`.
+
+Segment 0 independent passive CAN decode:
+- OEM `ADRV_0x160` RX bus 2: **3,065** frames, all raw `AEB_SETTING=3`. During a short startup/bridge period, **349** additional frames appeared on bus 0 with raw=3; avoid counting mirrored/forwarded traffic as distinct OEM ECUs. **No TX 0x160**.
+- OEM `TCS (0x175)` RX bus 0: **3,066** frames, all `FCA_EquipSta=1`, `FCA_AvlblSta=0`. There were **349** additional RX bus 2 frames with the same values during bus transition; `sendcan` bus 2 TCS: **2,658** frames, with these values.
+- `SCC_CONTROL (0x1A0)` RX bus 2: **3,064** frames; TX bus 0: **2,659** frames.
+- Wheel speeds from RX bus 0 `WHEEL_SPEEDS (0xA0)`: max mean wheel speed **13.875 km/h**; `ESP_STATUS (0x60)` raw brake pressure max **114**, including ~22–23 seconds with speed near zero. No positive brake-pedal sample in those specific two seconds, but this is **not** evidence of AEB: automatic hold, normal SCC and other causes remain possible.
+- No `ADRV_0x161` frames seen in this segment's watched CAN traffic. This does **not** prove the source of the driver's reported audible/red FCW alert.
+- Segment 1 remains as previously documented: RX 0x160 bus 2 = 3,001 raw=3; RX TCS bus 0 = 3,001 equip=1, available=0; TX 0x160 = 0; TX SCC_CONTROL bus 0 = 2,993; max wheel speed 7.64 km/h.
+
+**Combined result:** Across both segments, RX bus 2 0x160 raw=3 totals **6,066** frames, RX bus 0 TCS equip=1/available=0 totals **6,067**, TX 0x160 totals **zero**. Carrot-wip's FCW warning is **user-observed only**; neither source of the red UI warning nor physical OEM AEB actuation has been independently proven. The sunnypilot 0000004f comparison remains an unmatched parked-state segment. No deployment authorization for experimental AEB/longitudinal coexistence.
