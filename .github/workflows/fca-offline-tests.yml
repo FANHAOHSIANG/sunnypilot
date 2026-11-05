@@ -28,3 +28,6 @@ jobs:
 
       - name: Synthetic AEB_SETTING bitfield audit regression
         run: python tools/fca_research/test_aeb_setting_audit.py
+
+      - name: Synthetic vehicle FCA provenance regression
+        run: python tools/fca_research/test_vehicle_fca_provenance.py
