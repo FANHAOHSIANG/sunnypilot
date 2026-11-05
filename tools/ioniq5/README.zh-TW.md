@@ -7,9 +7,9 @@
 維持原有 C4 安裝，車輛 READY、P 檔、車速為零，Mac 及 HUD 照平常接好。在 C4 的 SSH 終端執行以下命令。正式的停車工具只訂閱現有服務、讀取 Params 與 Jetlink 狀態。每個 CAN 項目只列 bus、位址和長度。
 
 ```bash
-cd /data/openpilot
+cd /data/openpilot &&
 curl -fLsS https://raw.githubusercontent.com/FANHAOHSIANG/sunnypilot/test/hcop-ioniq5-c4-jetlink-hud/tools/ioniq5/parked.py -o /tmp/hcop-parked.py && \
-  PYTHONPATH=/data/openpilot python3 /tmp/hcop-parked.py --seconds 20
+  PYTHONPATH="$PWD/pydeps:$PWD${PYTHONPATH:+:$PYTHONPATH}" python3 /tmp/hcop-parked.py --seconds 20
 ```
 
 如需在電腦進一步比對，可在 python 指令尾端加上 `> /tmp/hcop-parked.json`，再把該檔複製到電腦。報告區分 Mac 身分、N16 已識別、外部推論當下正在使用。P 檔時外部模型可能待命。導航計數只代表取樣期間實際收到的事件。若韌體數為 0，需另取得自原廠系統完整開機的被動紀錄。這支工具不會主動查詢或重啟 ECU。
