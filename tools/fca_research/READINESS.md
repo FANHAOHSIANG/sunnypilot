@@ -148,3 +148,15 @@ Independently re-decoded the uploaded `99411088c9cfd064_0000004f--858ff9d82b--0-
 | ESP_STATUS BRAKE_PRESSURE | 0 throughout | 0–213 raw |
 
 The two segments differ in driving state and are not a matched on-road A/B test. In particular, **both** show received 0x160 raw=3 and FCA availability 0; the strongest differentiator is sunnypilot's **additional** outgoing raw=1 0x160 frame. No physical AEB function can be inferred from either segment. DBC enum labels are not independently verified against Hyundai service documentation.
+
+## 2026-11-06 user clarification: FCW, **not** AEB actuation
+
+**Authoritative firsthand correction:** For carrot-wip route `00000384--8d2511ca94`, the driver observed **only an audible forward-collision warning and a red forward-collision visual warning**. The driver **did not report automatic emergency braking**. Earlier descriptions of this route as an "AEB intervention" were incorrect; relabel it as a **reported FCW event** throughout future conclusions.
+
+What is supported:
+- The user's firsthand FCW observation is consistent with a functioning warning path in the tested carrot-wip setup.
+- Segment 1 contains OEM 0x160 raw AEB_SETTING=3 and TCS FCA_AvlblSta=0, with no outgoing 0x160; sunnypilot comparison shows outgoing raw=1 0x160. These are configuration/communication observations.
+- No recorded or firsthand evidence currently demonstrates **physical AEB actuation**. Brake pressure changes cannot be attributed to AEB, especially with driver braking/low-speed operation.
+- The available RLOG may not include the exact FCW moment. Correlate the user's event time with logs before attributing it to stock FCW versus openpilot FCW.
+
+**Deployment gate remains blocked** for claims of OEM AEB preservation. Do not deliberately induce an FCW or AEB event on public roads. Do not suppress warning messages, forge OEM availability, or weaken Panda Safety.
