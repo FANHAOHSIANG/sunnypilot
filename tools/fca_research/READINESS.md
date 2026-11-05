@@ -111,3 +111,9 @@ Results for this **one 60-second segment**:
 **New key comparison:** Earlier sunnypilot route 0000004f segment 0 had openpilot TX 0x160 with raw `AEB_SETTING=1`; this carrot segment has OEM RX 0x160 raw `3` and no TX 0x160. This supports a concrete difference in **warning/configuration signaling**, but does not prove the OEM brake actuator was enabled or triggered.
 
 **Next:** obtain 00000384 segment 1 and timestamp of the driver's observed event, correlate speed, brake pressure, TCS and OEM status; read OEM FCA DTC/ECU health and professionally validate actual AEB. Do not remove 0x160 warnings, forge availability status, relax Panda Safety, or deploy unvalidated changes to public roads.
+
+### Additional code-path correlation (a825bccd)
+
+Carrot `carcontroller.py` lines ~599-606 sends `create_acc_control_scc2()` **and** `create_tcs_messages()` when `CP.flags & HyundaiFlags.CAMERA_SCC` is true. Carrot `create_fca_warning_light(CP,...)` returns without TX when `CAMERA_SCC` is set. The simultaneous observed TX `SCC_CONTROL` bus 0 and TX `TCS` bus 2 at ~50 Hz, with no TX `ADRV_0x160`, is therefore **strongly consistent with the carrot CAMERA_SCC-specific control path**. This contrasts with the previously reported sunnypilot CarParams `CANFD_CAMERA_SCC` but not `CAMERA_SCC`. Exact carrot CarParams for this route should be recovered before asserting the flag as proven.
+
+Do not copy carrot's SCC2/TCS frame rewrites to sunnypilot without variant-specific DBC, stock ECU arbitration, and full safety testing.
