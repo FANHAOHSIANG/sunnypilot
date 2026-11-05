@@ -128,3 +128,16 @@ def test_curve_state_is_cleared_when_model_gaps_or_driver_overrides():
   curve = c.curve
   assert frame(1.05, gas=True) is None and c.curve.req_f == 0.
   assert frame(2.)['evaluated'] and c.curve is not curve
+
+
+def test_jetlink_diagnostics_distinguish_identified_from_active(tmp_path):
+  import json
+  from parked import N16
+  (tmp_path / 'carrot-jetlink.json').write_text(json.dumps(
+    dict(updated=19., transport='usb', protocol=3, peer={'carrot_host': 'mac'})))
+  (tmp_path / 'carrot-jetlink-model.json').write_text(json.dumps(
+    dict(updated=19., sha256=N16, active=False)))
+  result = model_status(tmp_path, 20.)
+  assert result['n16_identified'] and result['mac'] and result['protocol'] == 3
+  assert not result['external_active']
+  assert not any(model_status(tmp_path, 25.).values())

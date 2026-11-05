@@ -46,7 +46,7 @@ def collect(duration):
                safety=[(str(s.safetyModel), s.safetyParam) for s in cp.safetyConfigs],
                ecu_types=sorted({str(f.ecu) for f in cp.carFw}), firmware_count=len(cp.carFw))
 
-  sm = messaging.SubMaster(['carState', 'navRoute', 'navInstruction'], poll='carState')
+  sm = messaging.SubMaster(['carState', 'navRoute', 'navInstruction', 'deviceState'], poll='carState')
   sm.update(1500)
   if not (sm.updated['carState'] and sm.valid['carState'] and parked(sm['carState'])):
     raise ValueError("需要即時、有效的 P 檔靜止狀態")
@@ -79,7 +79,13 @@ def collect(duration):
       display[key] = params.get_int(key)
     except (KeyError, ValueError, TypeError):
       pass
-  return dict(car=car, observed_ids={k: sorted(v) for k, v in seen.items()}, samples=dict(samples),
+  health = {}
+  if sm.valid['deviceState'] and 0 <= time.monotonic() - sm.logMonoTime['deviceState'] / 1e9 < 3.:
+    ds = sm['deviceState']
+    health = dict(cpu_temperatures=list(ds.cpuTempC), gpu_temperatures=list(ds.gpuTempC),
+                  memory_used_percent=ds.memoryUsagePercent, storage_free_percent=ds.freeSpacePercent,
+                  network_type=str(ds.networkType))
+  return dict(car=car, device=health, observed_ids={k: sorted(v) for k, v in seen.items()}, samples=dict(samples),
               jetlink=model_status(Path('/dev/shm'), time.monotonic()), settings=display)
 
 
