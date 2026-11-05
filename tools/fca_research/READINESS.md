@@ -174,3 +174,15 @@ Segment 0 independent passive CAN decode:
 - Segment 1 remains as previously documented: RX 0x160 bus 2 = 3,001 raw=3; RX TCS bus 0 = 3,001 equip=1, available=0; TX 0x160 = 0; TX SCC_CONTROL bus 0 = 2,993; max wheel speed 7.64 km/h.
 
 **Combined result:** Across both segments, RX bus 2 0x160 raw=3 totals **6,066** frames, RX bus 0 TCS equip=1/available=0 totals **6,067**, TX 0x160 totals **zero**. Carrot-wip's FCW warning is **user-observed only**; neither source of the red UI warning nor physical OEM AEB actuation has been independently proven. The sunnypilot 0000004f comparison remains an unmatched parked-state segment. No deployment authorization for experimental AEB/longitudinal coexistence.
+
+## 2026-11-06: vehicle-mode provenance gate added (no actuation)
+
+Added `tools/fca_research/vehicle_fca_provenance.py` plus synthetic tests. It reads archived RLOGs and reports:
+- actual **CarParams.flags** (if a `carParams` event is recorded), and independently the **safetyConfigs.safetyParam**; the `CAMERA_SCC` vehicle flag must not be inferred solely from the similarly named Panda safety flag;
+- whether Alpha longitudinal was enabled in the recorded CarParams;
+- raw RX/TX `ADRV_0x160.AEB_SETTING`, `TCS.FCA_EquipSta/FCA_AvlblSta`, and SCC_CONTROL counts by bus;
+- optional `stockFcw`/`stockAeb` and openpilot FCW alert events, with caveat that CAN FD Alpha can leave stock warning fields unpopulated.
+
+The central unresolved fork is whether carrot's observed no-TX-0x160 behavior is explained by the **vehicle flag** `HyundaiFlags.CAMERA_SCC` and a different SCC2/TCS control path, versus another controller condition. Neither source code nor the Panda safetyParam=1037 proves which vehicle flags were active in the carrot route.
+
+This is a **read-only diagnostic gate**, not an FCA/AEB control fix. No live ECU/Panda changes. Unit tests are committed but have not yet been verified running on the user's Mac.
