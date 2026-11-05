@@ -2,6 +2,13 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
+# This native candidate is for host replay until the IONIQ 5 startup fingerprint,
+# ECU behavior and device image are verified. Never enter the updater on a C4.
+if [ -f /AGNOS ]; then
+  echo "HCOP IONIQ 5 bench branch: native device launch is disabled. Use the parked observer with your existing Carrot install." >&2
+  exit 78
+fi
+
 source "$DIR/launch_env.sh"
 
 function agnos_init {

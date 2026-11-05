@@ -12,10 +12,10 @@ from enum import IntEnum
 
 import numpy as np
 
-from openpilot.cereal import log
 from openpilot.common.constants import CV
-from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.modeld.constants import ModelConstants
+
+DT_MDL = 1.0 / ModelConstants.MODEL_RUN_FREQ
 
 # There is no speed floor. A 20 km/h one sat here and ruled out the junction turns this is
 # for: replaying the 09-16 drive, removing it adds 461 frames of entering, 316 of them
@@ -190,7 +190,6 @@ _FAR_OFF_FLAG = "/data/curve_far_off"
 # _LC_HOLD after it; replayed over the same day that leaves 0 of 45 with any braking (1 s already does,
 # 1 of 45 at 0 s) and every one of the 160535 frames away from a lane change unchanged.
 _LC_HOLD = 2.0   # s
-_LC_STATES = (log.LaneChangeState.laneChangeStarting, log.LaneChangeState.laneChangeFinishing)
 
 # ---- winding road (2026-10-25). The driver, of a winding stretch that day (14:18-14:21, six bends of 85-125
 # degrees at 18-34 km/h): it does not feel right through the bends. What the car did: out of each bend it
@@ -361,6 +360,9 @@ ENABLED_STATES = (CurveState.enabled, CurveState.overriding, *ACTIVE_STATES)
 
 class CurveSpeedControl:
   def __init__(self):
+    from openpilot.common.params import Params
+    from openpilot.cereal import log
+    self.lane_change_states = (log.LaneChangeState.laneChangeStarting, log.LaneChangeState.laneChangeFinishing)
     self.params = Params()
     self.frame = -1
     self.enabled = self.params.get_bool("SmartCruiseControlVision")
@@ -514,7 +516,7 @@ class CurveSpeedControl:
     self.a_ego = a_ego
 
     self._update_params()
-    if sm['modelV2'].meta.laneChangeState in _LC_STATES:
+    if sm['modelV2'].meta.laneChangeState in self.lane_change_states:
       self.lc_hold = _LC_HOLD
     else:
       self.lc_hold = max(self.lc_hold - DT_MDL, 0.)

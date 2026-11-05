@@ -41,7 +41,7 @@ from openpilot.selfdrive import keypad
 
 PORT = 8902
 KEYPAD_TOKEN = "/data/keypad_token"
-SERVICES = ["carState", "selfdriveState", "radarState", "radarTracksSP", "modelV2", "carControl",
+SERVICES = ["carParams", "carState", "selfdriveState", "radarState", "radarTracksSP", "modelV2", "carControl",
             "longitudinalPlan", "longitudinalPlanSP", "controlsState", "gpsLocationExternal", "pandaStates"]
 
 # what the planner says set the accel; the page shows these instead of the raw plan source
@@ -436,10 +436,21 @@ def watchdog():
 
 
 def _produce():
+  workers = []
+  try:
+    _produce_with_workers(workers)
+  finally:
+    for worker in workers:
+      worker.close()
+
+
+def _produce_with_workers(workers):
   global _snapshot, _snapshot_ts, _frame, _model_cache
   sm = messaging.SubMaster(SERVICES)
   params = Params()
   mem_params = Params("/dev/shm/params")
+  from openpilot.hud.ioniq5.live import LiveRadar
+  display_radar = None
   targets = TargetTracker()
   last_target_t = time.monotonic()
   edges = RoadEdgeLaneChangeController()
@@ -458,6 +469,15 @@ def _produce():
               and not (gps.latitude == 0 and gps.longitude == 0))
     radar_points = [{"dRel": float(p.dRel), "yRel": float(p.yRel), "vRel": float(p.vRel)}
                     for p in sm["radarTracksSP"].points]
+    is_ioniq5 = (onroad and sm.seen["carParams"] and sm.valid["carParams"]
+                 and sm["carParams"].carFingerprint == "HYUNDAI_IONIQ_5")
+    if is_ioniq5 and display_radar is None:
+      display_radar = LiveRadar(sm["carParams"])
+      workers.append(display_radar)
+    elif not is_ioniq5 and display_radar is not None:
+      display_radar.close()
+      workers.remove(display_radar)
+      display_radar = None
     data["standby"] = not onroad
     data["clock"] = _clock()
     if not onroad:
@@ -499,7 +519,16 @@ def _produce():
         data["radarState"] = _radar_state(sm["radarState"])
         dt = max(1e-3, min(0.5, now - last_target_t))
         last_target_t = now
-        others = _radar_targets(radar_points, targets, float(sm["carState"].vEgo), dt)
+        display_points = radar_points
+        if display_radar is not None:
+          snapshot = display_radar.snapshot(now)
+          display_points = snapshot["points"] if snapshot else []
+          if not display_points:
+            targets.reset()
+          pressures = display_radar.tpms_snapshot(now)
+          if pressures:
+            data["carState"]["tpms"] = pressures
+        others = _radar_targets(display_points, targets, float(sm["carState"].vEgo), dt)
         # radard's leads come first, so the page still treats the followed car as the main one
         followed = data["radarState"]["dRel"] if data["radarState"]["leadStatus"] else None
         # radar and vision disagree more the further the car: ~6 m at 40 m out on this
