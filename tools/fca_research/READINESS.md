@@ -86,3 +86,11 @@ PYTHONPATH=/data/openpilot:/data/openpilot/opendbc_repo python3 /tmp/aeb_setting
   --output /tmp/ioniq5_aeb_setting.json
 ```
 Fetch the audited script from the branch to `/tmp/aeb_setting_audit.py` before this invocation. Do not deploy any experimental controls, suppress warnings, or induce collision warnings on public roads.
+
+## 2026-11-05 new carrot route reported as AEB intervention
+
+User supplied route `00000384--8d2511ca94`, segments 0 and 1, device Ioniq 5, branch `test/iphone-led-bridge-20261105`, commit `a825bccd` (2026-11-05 16:52:04). User reports that an AEB intervention occurred in this route. The public upload index links are not directly accessible from this environment; the two raw RLOGs have **not** been decoded here. Do not treat the route's `OK` upload status as AEB evidence.
+
+Source inspection of `ajouatom/openpilot@a825bccd` `opendbc_repo/opendbc/car/hyundai/carstate.py` lines ~668-680: `stockAeb`/`stockFcw` are set inside a branch requiring `not openpilotLongitudinalControl or CAMERA_SCC`. A CAN FD car using `CANFD_CAMERA_SCC` with Alpha longitudinal and without the distinct `CAMERA_SCC` flag may **not populate** these fields. A missing `stockAeb` in RLOG is therefore NOT evidence AEB did not occur. Conversely a positive flag would be evidence of decoded stock AEB state, not independent proof of brake actuator force.
+
+New read-only `tools/fca_research/route_aeb_event_inventory.py` can inventory `carState.stockAeb`, `stockFcw`, event names, and logged CarParams from locally present segments. Compare with the existing `aeb_setting_audit.py` on those same logs, then correlate time with user-observed intervention and OEM DTC/ECU data. No controller or Panda Safety modifications are authorized.
