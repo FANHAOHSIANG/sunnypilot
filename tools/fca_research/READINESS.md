@@ -117,3 +117,19 @@ Results for this **one 60-second segment**:
 Carrot `carcontroller.py` lines ~599-606 sends `create_acc_control_scc2()` **and** `create_tcs_messages()` when `CP.flags & HyundaiFlags.CAMERA_SCC` is true. Carrot `create_fca_warning_light(CP,...)` returns without TX when `CAMERA_SCC` is set. The simultaneous observed TX `SCC_CONTROL` bus 0 and TX `TCS` bus 2 at ~50 Hz, with no TX `ADRV_0x160`, is therefore **strongly consistent with the carrot CAMERA_SCC-specific control path**. This contrasts with the previously reported sunnypilot CarParams `CANFD_CAMERA_SCC` but not `CAMERA_SCC`. Exact carrot CarParams for this route should be recovered before asserting the flag as proven.
 
 Do not copy carrot's SCC2/TCS frame rewrites to sunnypilot without variant-specific DBC, stock ECU arbitration, and full safety testing.
+
+## Correction and verification: 00000384 segment **1**, not 0 (2026-11-06)
+
+The user uploaded `00000384--8d2511ca94--1--rlog.zst`, SHA-256 `0d9cc06f2c9ef8b21eee1149067711e52670e68a1fba0f45eebfe8a8337049`. It is byte-for-byte identical to the earlier upload titled `rlog.zst 10`. **The earlier analysis erroneously called that upload segment 0; all earlier counts attributed to segment 0 belong to segment 1.** Segment 0 is not yet verified from a distinct file.
+
+A read-only pure-Python Cap'n Proto message framing/list parser (without external packages) independently decoded the uploaded 53,898,928-byte decompressed stream, 87,143 messages, and obtained:
+- `can` bus 2 `ADRV_0x160`: **3,001**, all raw `AEB_SETTING=3` (DBC `VAL_ 352` labels 3 as `active assist`); no `sendcan` `0x160`.
+- `can` bus 0 `TCS (0x175)`: **3,001**, all `FCA_EquipSta=1`, `FCA_AvlblSta=0` (DBC labels equipped and available). `sendcan` bus 2 TCS: **2,993**, same values. Bus 128/130 echoes should not be double counted as independent OEM messages.
+- `can` bus 2 `SCC_CONTROL (0x1A0)`: **3,002**; `sendcan` bus 0 `SCC_CONTROL`: **2,993**.
+- `can` bus 0 `WHEEL_SPEEDS (0xA0)`: observed average wheel speed **0–7.64 km/h** in the segment.
+- `can` bus 0 `ESP_STATUS (0x60)`: `BRAKE_PRESSURE` raw **0–213**. Distinct braking-related intervals at approximately 13–16 seconds (peak raw 155), 21–25 seconds (peak 213), and 26 seconds (raw 151). Some intervals include driver-brake state asserted, so brake pressure is **not** proof of OEM AEB actuation.
+- No `0x730` or `0x7D0` frames in this segment.
+
+**Status:** OEM FCA status bytes and lack of TX `0x160` are concrete, but do not establish physical AEB intervention. User reports AEB triggered on this route; this is not yet independently confirmed. The strongest next evidence is the *distinct* segment 0 RLOG, event timestamp, and OEM ECU/DTC plus brake actuation evidence.
+
+Do not copy or deploy `create_tcs_messages`, `create_acc_control_scc2`, or altered Panda Safety to public-road use without a qualified safety review and closed-course testing.
