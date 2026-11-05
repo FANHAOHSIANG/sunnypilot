@@ -523,6 +523,11 @@ def _produce_with_workers(workers):
         if display_radar is not None:
           snapshot = display_radar.snapshot(now)
           display_points = snapshot["points"] if snapshot else []
+          data["ioniq5Display"] = {
+            "carStateMono": sm.logMonoTime["carState"], "carStateValid": sm.valid["carState"],
+            "radarMono": round(snapshot["sample_time"] * 1e9) if snapshot and snapshot["sample_time"] is not None else 0,
+            "points": display_points,
+          }
           if not display_points:
             targets.reset()
           pressures = display_radar.tpms_snapshot(now)

@@ -19,11 +19,12 @@ TTL = .25
 FAMILIES = {'front210': (0x210, 16, 32), 'front3a5': (0x3a5, 32, 24),
             'front400': (0x400, 30, 24), 'corner235': (0x235, 20, 32),
             'corner180': (0x180, 5, 32)}
+FRAME_FAMILIES = {(address, size): name for name, (start, count, size) in FAMILIES.items()
+                  for address in range(start, start + count)}
 
 
 def family_for(address, length):
-  return next((name for name, (start, count, size) in FAMILIES.items()
-               if start <= address < start + count and length == size), None)
+  return FRAME_FAMILIES.get((address, length))
 
 
 def bits(word, start, size, signed=False):
@@ -162,5 +163,5 @@ and three consecutive observations per target are needed before display.
     points = [dict(point, age=now - stamp) for stamp, group in active.values() for point in group]
     points.sort(key=lambda p: (p['dRel'], p['trackId']))
     return dict(version=1, source=SOURCE, boot_id=boot_id, updated=now,
-                bus=self.bus, groups=sorted(active), ambiguous_front=len(fronts) > 1, points=points[:32])
+                sample_time=min((t for t, _ in active.values()), default=None), bus=self.bus, groups=sorted(active), ambiguous_front=len(fronts) > 1, points=points[:32])
 

@@ -35,12 +35,13 @@ class LiveRadar:
             if message is None:
               continue
             now = time.monotonic()
-            if message.valid:
+            stamp = message.logMonoTime / 1e9
+            if message.valid and 0 <= now - stamp < .25:
               with self.lock:
                 for frame in message.can:
-                  if frame.address == 0x3a0 and frame.src == self.tpms_bus and len(frame.dat) == 16 and 0 <= now - message.logMonoTime / 1e9 < .25:
-                    self.tpms = (message.logMonoTime / 1e9, decode_tpms(bytes(frame.dat)))
-                  decoder.feed(frame.address, frame.src, frame.dat, message.logMonoTime / 1e9, now)
+                  if frame.address == 0x3a0 and frame.src == self.tpms_bus and len(frame.dat) == 16:
+                    self.tpms = (stamp, decode_tpms(frame.dat))
+                  decoder.feed(frame.address, frame.src, frame.dat, stamp, now)
         finally:
           with self.lock:
             self.decoder = None

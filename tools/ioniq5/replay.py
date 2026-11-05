@@ -46,8 +46,9 @@ def events(schema, stream):
       at = end
 
 
-def replay(schema, path):
+def replay(schema, path, tx_layout=None):
   counts, features, radar_peak = Counter(), Counter(), Counter()
+  outside_layout = Counter()
   decoders = {n: PassiveRadar(n) for n in (0, 1, 2)}
   shadow, cp = CurveShadow(), None
   complete = True
@@ -70,6 +71,12 @@ def replay(schema, path):
           cp = dict(fingerprint=p.carFingerprint, flags=p.flags, firmware_entries=len(p.carFw),
                     longitudinal=p.openpilotLongitudinalControl, tuning=p.lateralTuning.which(),
                     safety=[(str(s.safetyModel), s.safetyParam) for s in p.safetyConfigs])
+        elif name == 'sendcan' and tx_layout is not None:
+          for frame in event.sendcan:
+            key = (frame.address, frame.src, len(frame.dat))
+            features['checked_tx_frames'] += 1
+            if key not in tx_layout:
+              outside_layout[f'{hex(frame.address)}/bus{frame.src}/len{len(frame.dat)}'] += 1
         elif name == 'can':
           for frame in event.can:
             decoder = decoders.get(frame.src)
@@ -93,20 +100,27 @@ def replay(schema, path):
     except EOFError:
       complete = False
   return dict(complete=complete, car=cp, valid_can=counts['can'], valid_models=counts['modelV2'],
-              radar_peak=dict(radar_peak), features=dict(features))
+              radar_peak=dict(radar_peak), features=dict(features),
+              **({'outside_tx_layout': dict(outside_layout)} if tx_layout is not None else {}))
 
 
 def main():
   ap = argparse.ArgumentParser(description=__doc__)
   ap.add_argument('--carrot', type=Path, default=Path(__file__).with_name('carrot-reference'))
+  ap.add_argument('--tx-layout', type=Path, help='Output of the native desktop tx_layout program')
   ap.add_argument('segments', type=Path, nargs='+')
   args = ap.parse_args()
   cereal = args.carrot.resolve() / 'openpilot/cereal'
   car = args.carrot.resolve() / 'opendbc_repo/opendbc/car'
   schema = capnp.load(str(cereal / 'log.capnp'), imports=[str(cereal), str(car)])
+  layout = None
+  if args.tx_layout:
+    layout = {tuple(map(int, line.split())) for line in args.tx_layout.read_text().splitlines()}
+    if not layout or any(len(row) != 3 for row in layout):
+      ap.error('invalid native TX layout')
   ok = True
   for i, segment in enumerate(args.segments, 1):
-    result = replay(schema, segment)
+    result = replay(schema, segment, layout)
     print(json.dumps(dict(segment=i, **result)), flush=True)
     ok &= result['complete'] and result['car'] is not None and result['valid_can'] > 0
   return 0 if ok else 2

@@ -7,7 +7,6 @@ from pathlib import Path
 import sys
 import time
 
-OBSERVED_IDS = {0x50, 0x110, 0x130, 0x1cf, 0x1a0, 0x1ba, 0x3a0}
 N16 = '01effc679eb46d6036ce0302673a87fe2dcfcc95a679daeeb929679e53c3647a'
 
 
@@ -27,7 +26,7 @@ def model_status(folder, now):
   link, model = fresh('carrot-jetlink.json'), fresh('carrot-jetlink-model.json')
   peer = link.get('peer') or {}
   return dict(usb=link.get('transport') == 'usb', mac=peer.get('carrot_host') == 'mac',
-              protocol=peer.get('protocol'), n16_identified=model.get('sha256') == N16,
+              protocol=link.get('protocol', peer.get('protocol')), n16_identified=model.get('sha256') == N16,
               external_active=model.get('active') is True)
 
 
@@ -43,7 +42,7 @@ def collect(duration):
   with structs.CarParams.from_bytes(raw) as cp:
     if cp.carFingerprint != 'HYUNDAI_IONIQ_5':
       raise ValueError("目前 CarParams 並非 HYUNDAI_IONIQ_5")
-    car = dict(name=cp.carFingerprint, flags=int(cp.flags), longitudinal=cp.openpilotLongitudinalControl,
+    car = dict(name=cp.carFingerprint, flags=int(cp.flags), ext_flags=int(cp.extFlags), longitudinal=cp.openpilotLongitudinalControl,
                safety=[(str(s.safetyModel), s.safetyParam) for s in cp.safetyConfigs],
                ecu_types=sorted({str(f.ecu) for f in cp.carFw}), firmware_count=len(cp.carFw))
 
@@ -70,7 +69,7 @@ def collect(duration):
     for f in msg.can:
       if f.src not in range(8):
         continue
-      if f.address in OBSERVED_IDS or 0x210 <= f.address <= 0x21f or 0x235 <= f.address <= 0x248 or 0x180 <= f.address <= 0x184:
+      if 0 <= f.address <= 0x7ff:
         seen[f.src].add((hex(f.address), len(f.dat)))
   if not samples['can_events']:
     raise ValueError("未收到有效 CAN 封包")
