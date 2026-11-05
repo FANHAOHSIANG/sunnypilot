@@ -94,3 +94,20 @@ User supplied route `00000384--8d2511ca94`, segments 0 and 1, device Ioniq 5, br
 Source inspection of `ajouatom/openpilot@a825bccd` `opendbc_repo/opendbc/car/hyundai/carstate.py` lines ~668-680: `stockAeb`/`stockFcw` are set inside a branch requiring `not openpilotLongitudinalControl or CAMERA_SCC`. A CAN FD car using `CANFD_CAMERA_SCC` with Alpha longitudinal and without the distinct `CAMERA_SCC` flag may **not populate** these fields. A missing `stockAeb` in RLOG is therefore NOT evidence AEB did not occur. Conversely a positive flag would be evidence of decoded stock AEB state, not independent proof of brake actuator force.
 
 New read-only `tools/fca_research/route_aeb_event_inventory.py` can inventory `carState.stockAeb`, `stockFcw`, event names, and logged CarParams from locally present segments. Compare with the existing `aeb_setting_audit.py` on those same logs, then correlate time with user-observed intervention and OEM DTC/ECU data. No controller or Panda Safety modifications are authorized.
+
+## 2026-11-05 carrot route 00000384 segment 0: decoded CAN evidence
+
+The user uploaded a 12.8 MB zstd RLOG, with 53,898,928 bytes decompressed, containing 87,143 Cap'n Proto messages. Local read-only parsing validated the entire concatenated message stream and extracted CAN frames without a live vehicle connection. Embedded log metadata identifies `test/iphone-led-bridge-20261105`, commit `a825bccd`, and log rotation to `00000384--8d2511ca94--1` (indicating this file is segment 0).
+
+Results for this **one 60-second segment**:
+- `ADRV_0x160`: RX bus 2 **3001 frames**, all `AEB_SETTING=3`. The mirrored bus 128 frames should **not** be counted as a separate ECU. No `sendcan` 0x160 frames.
+- `TCS (0x175)`: RX bus 0 **3001 frames**, all `FCA_EquipSta=1` and `FCA_AvlblSta=0`; TX bus 2 **2993 frames** with the same values. Bus 130 mirrors bus 0.
+- `SCC_CONTROL (0x1A0)`: TX bus 0 **2993 frames**, RX bus 2 **3002 frames**. Bus 128 also mirrors received 0x1A0.
+- The pinned carrot-wip DBC at `a825bccd` labels `AEB_SETTING=3` as `active assist`, `FCA_EquipSta=1` as equipped, and `FCA_AvlblSta=0` as available. These are **DBC label interpretations**, not independent OEM functional validation.
+- Wheel speed `WHEEL_SPEEDS (0xA0)` was 0–7.64 km/h; ESP_STATUS brake pressure varied 0–213 raw units and the driver brake-pressed flag was sometimes true. These facts **cannot attribute braking to OEM AEB**. A low-speed brake pressure change may have several causes, including driver brake/auto-hold.
+- No 0x730/0x7D0 frames were observed in the segment; this does not prove no ECU diagnostics in other segments.
+- Carrot source `carstate.py` has a guard which may leave `stockAeb` unset in CANFD_CAMERA_SCC Alpha longitudinal mode. A missing stockAeb event is not negative evidence.
+
+**New key comparison:** Earlier sunnypilot route 0000004f segment 0 had openpilot TX 0x160 with raw `AEB_SETTING=1`; this carrot segment has OEM RX 0x160 raw `3` and no TX 0x160. This supports a concrete difference in **warning/configuration signaling**, but does not prove the OEM brake actuator was enabled or triggered.
+
+**Next:** obtain 00000384 segment 1 and timestamp of the driver's observed event, correlate speed, brake pressure, TCS and OEM status; read OEM FCA DTC/ECU health and professionally validate actual AEB. Do not remove 0x160 warnings, forge availability status, relax Panda Safety, or deploy unvalidated changes to public roads.
