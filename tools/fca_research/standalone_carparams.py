@@ -40,10 +40,10 @@ def main():
             if nsegments > 512:
                 raise ValueError(f"Invalid segment count {nsegments}")
             table_size = ((nsegments + 2) // 2) * 8
-            table = header[4:] + reader.read(table_size - 4)
-            if len(table) != table_size:
+            table = header[4:] + reader.read(table_size - 8)
+            if len(table) != table_size - 4:
                 raise ValueError("Truncated capnp segment table")
-            words = [int.from_bytes(table[4+i*4:8+i*4], "little") for i in range(nsegments)]
+            words = [int.from_bytes(table[i*4:(i+1)*4], "little") for i in range(nsegments)]
             body_len = sum(words) * 8
             body = reader.read(body_len)
             if len(body) != body_len:
