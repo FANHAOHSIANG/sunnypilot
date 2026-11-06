@@ -24,8 +24,12 @@ def main():
     car_schema = root / "opendbc_repo/opendbc/car/car.capnp"
     if not log_schema.is_file() or not car_schema.is_file():
         ap.error(f"Missing log.capnp or car.capnp in {root}")
-    # log.capnp uses imports relative to the source tree.
-    schema = capnp.load(str(log_schema), imports=[str(root), str(root / "openpilot/cereal"), str(root / "opendbc_repo")])
+    # Absolute Cap'n Proto import "/car.capnp" resolves against include roots.
+    # The include root must be the directory containing car.capnp.
+    schema = capnp.load(str(log_schema), imports=[
+        str(car_schema.parent),
+        str(log_schema.parent),
+    ])
     report = {"rlog": str(args.rlog), "carParamsEvents": [], "errors": 0}
     # Cap'n Proto messages are concatenated, each with segment table and 8-byte-aligned segments.
     # This scans one message at a time, without constructing a giant decoded buffer.
