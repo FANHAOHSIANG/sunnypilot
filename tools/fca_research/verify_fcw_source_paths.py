@@ -43,7 +43,7 @@ def inspect(carrot: Path, sunny: Path, carrot_flags: int, sunny_flags: int):
     sunny_canfd = _class_expr(sv, "HyundaiFlags", "CANFD_CAMERA_SCC")
     carrot_fn, carrot_args = _method(cf, "create_fca_warning_light")
     sunny_fn, sunny_args = _method(sf, "create_fca_warning_light")
-    carrot_ctrl, _ = _method(cc, "create_canfd_msgs")
+    carrot_ctrl, _ = _method(cc, "update")
     sunny_ctrl, _ = _method(sc, "create_canfd_msgs")
     # Explicit source checks: fail closed when upstream changes.
     assert carrot_canfd in ("2 ** 3", "8"), carrot_canfd
