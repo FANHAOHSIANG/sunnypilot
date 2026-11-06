@@ -217,3 +217,19 @@ Sunnypilot raw flags `134227976 = 0x08002808` bits `[3,11,13,27]`, per sunnypilo
 Carrot Panda safetyParam `6173 = 0x181D` bits `[0,2,3,4,11,12]`: EV_GAS, LONG, CAMERA_SCC, CANFD_LKA_STEERING, CANFD_CLUSTER_DIRECT_TX, CANFD_SPAS_BLINKERS. Sunnypilot `1037 = 0x040D` bits `[0,2,3,10]`: EV_GAS, LONG, CAMERA_SCC, CANFD_DYNAMIC_TORQUE. These are substantially different Panda configurations. The carrot `CANFD_HDA2` bit and safety `CANFD_LKA_STEERING` additionally indicate an HDA2-style steering pathway, which must not be transplanted into the sunnypilot configuration without vehicle-specific review.
 
 **Status:** root cause of **outgoing AEB_SETTING=1 difference** is now source-backed and matched to actual CarParams, but OEM AEB braking is still **unverified**. No deployment, warning suppression, or Panda safety modification is approved. An offline-only code-path assertion test is appropriate as next step.
+
+## 2026-11-06: FCW-first acceptance and fail-closed offline source gate
+
+User clarified the only firsthand event was an **audible forward-collision warning plus red warning**, not autonomous emergency braking. FCW warning coexistence is the immediate goal; **do not intentionally provoke a collision warning on public roads**. The source of that warning (OEM FCA versus openpilot UI) remains unverified. OEM AEB remains unvalidated and must not be represented as functional.
+
+Added `tools/fca_research/verify_fcw_source_paths.py`, a read-only Python AST assertion against two existing local clones. It checks exact Carrot versus Sunny CAMERA_SCC bit definitions, observed CarParams flag masks, FCW warning helper signature and skip path, and the respective controller call sites. The test **fails closed** on source changes. It does not send CAN or edit the controller. It has not yet been run by the user on their Mac; do not claim it passed.
+
+Mac command:
+```bash
+cd ~/CarrotMacHUD/fca-research/sunnypilot-lab && git pull --ff-only
+python3 tools/fca_research/verify_fcw_source_paths.py \
+  --carrot "$HOME/CarrotMacHUD/fca-research/carrot-wip" \
+  --sunny "$HOME/CarrotMacHUD/fca-research/sunnypilot-lab"
+```
+
+Passing the source gate is a **diagnostic milestone**, not permission to suppress AEB_SETTING, modify Panda, or install an unvalidated fork. Next identify whether the red FCW is an OEM cluster warning or an openpilot alert from already recorded logs/video. Only after this evidence and safety review should any functional changes be contemplated.
