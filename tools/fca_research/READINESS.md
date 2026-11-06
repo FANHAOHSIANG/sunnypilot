@@ -242,3 +242,13 @@ The user ran `verify_fcw_source_paths.py` on Mac mini against their actual carro
 **Not verified:** the provenance of the user's red/audible FCW (Hyundai cluster vs openpilot alert), actual OEM AEB actuation, ECU diagnostic health, safety of transplanting controller behavior, or live on-road operation. `PASS_SOURCE_PATH_ONLY` must never be interpreted as permission to disable 0x160 or deploy a changed longitudinal controller.
 
 Next non-invasive evidence gate: analyze `selfdriveState.alertType/alertText1/alertHudVisual` and `carState.stockFcw` in the recorded event window; note CAN FD Alpha may leave stockFcw unset. If these are absent, ask for dashcam video or driver identification of which display showed the red alert. No deliberate FCW provocation on public roads.
+
+## 2026-11-06: Driver confirms OEM Hyundai cluster/HUD FCW
+
+The user explicitly confirmed that the **red FCW warning appeared on the Hyundai factory instrument cluster/HUD**, accompanied by the previously reported audible collision warning. It was **not merely an openpilot C4 screen alert**.
+
+This strengthens the field evidence that the **factory-display FCW warning path remained active** in the tested carrot-wip configuration, while Alpha longitudinal was enabled (CarParams flags 402663433, longitudinal=true, safetyParam=6173). It is consistent with received AEB_SETTING=3 and FCA_AvlblSta=0 and no transmitted AEB_SETTING=1 in the two logged segments.
+
+Scope: This is **firsthand driver-observed OEM display behavior**, not independent proof of which ECU generated the warning, physical AEB braking, or equivalent behavior on sunnypilot. It must not be generalized to all vehicles/firmware. No induced FCW tests on public roads.
+
+FCW-first acceptance now requires: (1) OEM cluster/HUD warning pathway not disabled or hidden, (2) no newly introduced FCA malfunction DTCs or abnormal warnings, (3) unchanged Panda safety constraints, (4) read-only CAN and CarParams corroboration, (5) no claim that AEB physical braking is verified. Do not alter live controller TX merely to make a dashboard warning disappear.
