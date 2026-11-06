@@ -186,3 +186,34 @@ Added `tools/fca_research/vehicle_fca_provenance.py` plus synthetic tests. It re
 The central unresolved fork is whether carrot's observed no-TX-0x160 behavior is explained by the **vehicle flag** `HyundaiFlags.CAMERA_SCC` and a different SCC2/TCS control path, versus another controller condition. Neither source code nor the Panda safetyParam=1037 proves which vehicle flags were active in the carrot route.
 
 This is a **read-only diagnostic gate**, not an FCA/AEB control fix. No live ECU/Panda changes. Unit tests are committed but have not yet been verified running on the user's Mac.
+
+## 2026-11-06: decisive CarParams and cross-fork flag alias discovery
+
+The user **successfully ran** standalone_carparams.py on actual carrot-wip route `00000384--8d2511ca94--1`, with **one** decoded CarParams event, **zero** errors:
+```json
+{"carFingerprint":"HYUNDAI_IONIQ_5","flags":402663433,"openpilotLongitudinalControl":true,"safetyConfigs":[{"model":"hyundaiCanfd","param":6173}],"logMonoTime":152388625295}
+```
+
+**Critical source-verified difference:** carrot-wip `ajouatom/openpilot@a825bccd` `opendbc_repo/opendbc/car/hyundai/values.py` defines `CAMERA_SCC = CANFD_CAMERA_SCC` (both bit 3). Its `create_fca_warning_light(CP,...)` returns without transmitting `ADRV_0x160` if `CP.flags & HyundaiFlags.CAMERA_SCC`. This **exactly explains** why the real carrot route (flags include bit 3) has zero TX 0x160.
+
+In pinned sunnypilot `TonyBinheWu/opendbc@1c51731784729da5ebaf24b3c34106bd27aaf94b`, `CANFD_CAMERA_SCC = 2**3` while `CAMERA_SCC = 2**15` (separate flags). Its `create_fca_warning_light()` does not receive CP and always transmits 0x160 raw=1 every other frame when invoked. Previous sunnypilot CarParams flags=134227976 include bit 3 but not bit 15. This explains the observed **software-side TX divergence**, not necessarily physical AEB behavior.
+
+Carrot raw flags `402663433 = 0x18002809` bits `[0,3,11,13,27,28]`, per carrot source:
+- bit 0 `CANFD_HDA2`
+- bit 3 `CANFD_CAMERA_SCC` and alias `CAMERA_SCC`
+- bit 11 `EV`
+- bit 13 `CANFD`
+- bit 27 `CANFD_CLUSTER_DIRECT_TX`
+- bit 28 `CANFD_SPAS_BLINKERS`.
+
+Sunnypilot raw flags `134227976 = 0x08002808` bits `[3,11,13,27]`, per sunnypilot source:
+- bit 3 `CANFD_CAMERA_SCC`
+- bit 11 `EV`
+- bit 13 `CANFD`
+- bit 27 `CANFD_DYNAMIC_TORQUE`.
+
+**Do not compare raw flag bit numbers across forks as equivalent meanings:** bit 27 is a *different feature* in each fork.
+
+Carrot Panda safetyParam `6173 = 0x181D` bits `[0,2,3,4,11,12]`: EV_GAS, LONG, CAMERA_SCC, CANFD_LKA_STEERING, CANFD_CLUSTER_DIRECT_TX, CANFD_SPAS_BLINKERS. Sunnypilot `1037 = 0x040D` bits `[0,2,3,10]`: EV_GAS, LONG, CAMERA_SCC, CANFD_DYNAMIC_TORQUE. These are substantially different Panda configurations. The carrot `CANFD_HDA2` bit and safety `CANFD_LKA_STEERING` additionally indicate an HDA2-style steering pathway, which must not be transplanted into the sunnypilot configuration without vehicle-specific review.
+
+**Status:** root cause of **outgoing AEB_SETTING=1 difference** is now source-backed and matched to actual CarParams, but OEM AEB braking is still **unverified**. No deployment, warning suppression, or Panda safety modification is approved. An offline-only code-path assertion test is appropriate as next step.
