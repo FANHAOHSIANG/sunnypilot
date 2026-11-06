@@ -233,3 +233,12 @@ python3 tools/fca_research/verify_fcw_source_paths.py \
 ```
 
 Passing the source gate is a **diagnostic milestone**, not permission to suppress AEB_SETTING, modify Panda, or install an unvalidated fork. Next identify whether the red FCW is an OEM cluster warning or an openpilot alert from already recorded logs/video. Only after this evidence and safety review should any functional changes be contemplated.
+
+## 2026-11-06: Mac source-path verification PASSED
+
+The user ran `verify_fcw_source_paths.py` on Mac mini against their actual carrot-wip and sunnypilot source checkouts. It reported `status: PASS_SOURCE_PATH_ONLY` with `carrot_flags=402663433`, `sunny_flags=134227976`, carrot CAMERA_SCC bit 3 present, sunny CANFD_CAMERA_SCC bit 3 present and sunny distinct CAMERA_SCC bit 15 absent. The test confirms the source-level skip of carrot's `create_fca_warning_light` and invocation of sunnypilot's warning helper on the non-LKA longitudinal branch.
+
+**Verified:** source-code control-path divergence and its agreement with previously decoded TX 0x160 logs.
+**Not verified:** the provenance of the user's red/audible FCW (Hyundai cluster vs openpilot alert), actual OEM AEB actuation, ECU diagnostic health, safety of transplanting controller behavior, or live on-road operation. `PASS_SOURCE_PATH_ONLY` must never be interpreted as permission to disable 0x160 or deploy a changed longitudinal controller.
+
+Next non-invasive evidence gate: analyze `selfdriveState.alertType/alertText1/alertHudVisual` and `carState.stockFcw` in the recorded event window; note CAN FD Alpha may leave stockFcw unset. If these are absent, ask for dashcam video or driver identification of which display showed the red alert. No deliberate FCW provocation on public roads.
