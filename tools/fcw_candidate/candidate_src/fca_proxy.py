@@ -32,9 +32,17 @@ def valid_payload(data: bytes) -> bool:
 
 def validate_bench_cp(cp) -> None:
   """Reject a partial or mismatched controller/safety configuration."""
-  if not int(cp.flags) & VEHICLE_BENCH_FLAG:
-    return
   configs = list(cp.safetyConfigs)
+  vehicle_requested = bool(int(cp.flags) & VEHICLE_BENCH_FLAG)
+  # Safety bit meanings are mode-specific; do not reinterpret another brand's
+  # bit 2048 as this Hyundai feature. Reject the reverse mismatch as well.
+  safety_requested = any(str(c.safetyModel) == "hyundaiCanfd" and
+                         bool(int(c.safetyParam) & SAFETY_BENCH_FLAG)
+                         for c in configs)
+  if not vehicle_requested and not safety_requested:
+    return
+  if vehicle_requested != safety_requested:
+    raise ValueError("FCW controller/safety configuration mismatch; paired activation required")
   if (str(cp.carFingerprint) != "HYUNDAI_IONIQ_5" or not cp.openpilotLongitudinalControl or
       int(cp.flags) != SUPPORTED_BASE_FLAGS | VEHICLE_BENCH_FLAG or len(configs) != 1 or
       str(configs[0].safetyModel) != "hyundaiCanfd" or

@@ -53,7 +53,6 @@ class TestNativePolicy(unittest.TestCase):
                    '-fsanitize=undefined','-fno-sanitize-recover=undefined',
                    '-I',str(ROOT/'candidate_src'),str(src),'-o',str(lib)]
     subprocess.run(cls.command, check=True, capture_output=True, text=True)
-    # Clang on Linux may leave UBSan runtime symbols in a shared test object.
     runtime = ctypes.util.find_library("ubsan") if sys.platform.startswith("linux") else None
     if runtime:
       C.CDLL(runtime, mode=C.RTLD_GLOBAL)
@@ -196,8 +195,9 @@ class TestNativePolicy(unittest.TestCase):
   def test_raw_off_and_reserved_are_relayed_not_fabricated(self):
     for setting in range(4):
       self.lib.reset(1);p,t=self.acquire(setting=setting)
-      self.assertEqual(bool(self.lib.fcw_ready(t)),setting in (2,3))
+      self.assertFalse(self.lib.fcw_ready(t))
       self.assertTrue(self.call('authorize',p,t))
+      self.assertEqual(bool(self.lib.fcw_ready(t)),setting in (2,3))
       self.assertEqual(p[3]&3,setting)
 
   def test_reset_revokes_pending_frame(self):

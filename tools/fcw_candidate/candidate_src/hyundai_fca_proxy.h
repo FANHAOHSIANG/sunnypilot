@@ -22,9 +22,11 @@ typedef struct {
   bool seen;
   bool ready;
   bool pending;
+  bool copy_authorized;
   uint8_t streak;
   uint8_t counter;
   uint32_t timestamp;
+  uint32_t last_authorized_timestamp;
   uint8_t payload[HFCA_LENGTH];
 } HyundaiFcaProxy;
 
@@ -57,7 +59,11 @@ static bool hfca_transport_healthy(const HyundaiFcaProxy *state, uint32_t now) {
 
 static bool hfca_fcw_ready(const HyundaiFcaProxy *state, uint32_t now) {
   const uint8_t setting = state->payload[3] & 3U;
-  return hfca_transport_healthy(state, now) && ((setting == 2U) || (setting == 3U));
+  // Receiving source frames is not enough: the paired host must also be
+  // successfully presenting copies. Authorization is NOT proof of bus delivery.
+  return hfca_transport_healthy(state, now) && state->copy_authorized &&
+         ((uint32_t)(now - state->last_authorized_timestamp) <= HFCA_TIMEOUT_US) &&
+         ((setting == 2U) || (setting == 3U));
 }
 
 static bool hfca_observe(HyundaiFcaProxy *state, unsigned int address, unsigned int bus,
@@ -77,6 +83,9 @@ static bool hfca_observe(HyundaiFcaProxy *state, unsigned int address, unsigned 
   const uint32_t elapsed = (uint32_t)(now - state->timestamp);
   const bool consecutive = state->seen && (data[2] == (uint8_t)(state->counter + 1U)) &&
                            (elapsed >= HFCA_MIN_INTERVAL_US) && (elapsed <= HFCA_TIMEOUT_US);
+  if (!consecutive) {
+    state->copy_authorized = false;
+  }
   state->streak = consecutive ? (uint8_t)(state->streak + (state->streak < HFCA_ACQUIRE_FRAMES ? 1U : 0U)) : 1U;
   state->seen = true;
   state->counter = data[2];
@@ -101,5 +110,7 @@ static bool hfca_authorize_tx(HyundaiFcaProxy *state, unsigned int address, unsi
     }
   }
   state->pending = false;
+  state->copy_authorized = true;
+  state->last_authorized_timestamp = now;
   return true;
 }
