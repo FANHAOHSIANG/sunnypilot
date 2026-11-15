@@ -1,0 +1,44 @@
+name: Ioniq 5 FCW isolated safety validation
+on:
+  push:
+    branches: ['test/ioniq5-fcw-oem-forwarding']
+    paths: ['tools/fcw_candidate/**', '.github/workflows/ioniq5-fcw-candidate.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pinned-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch exact opendbc baseline (no vehicle access)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init opendbc_repo
+          test "$(git -C opendbc_repo rev-parse HEAD)" = "1c51731784729da5ebaf24b3c34106bd27aaf94b"
+          mkdir -p fcw-results
+          git -C opendbc_repo archive --format=tar HEAD | gzip > fcw-results/opendbc-baseline.tar.gz
+          python -m pip install numpy tqdm pycapnp pycryptodome cffi
+          python -m pip freeze > fcw-results/python-dependencies.txt
+      - name: Compile and execute unmodified Hyundai CAN FD C safety tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd opendbc_repo
+          PYTHONPATH="$PWD" python -m unittest opendbc.safety.tests.test_hyundai_canfd 2>&1 | tee ../fcw-results/baseline-hyundai.log
+      - name: Upload baseline evidence (not an installable image)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcw-baseline-${{ github.sha }}
+          path: fcw-results/
+          if-no-files-found: error
+          retention-days: 14
