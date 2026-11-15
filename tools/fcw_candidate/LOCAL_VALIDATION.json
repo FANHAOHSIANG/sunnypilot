@@ -1,0 +1,13 @@
+{
+  "status": "BENCH_ONLY_NOT_ROAD_VALIDATED",
+  "opendbc_baseline": "1c51731784729da5ebaf24b3c34106bd27aaf94b",
+  "python_helper_tests": {"run": 15, "passed": 15},
+  "native_c_gcc_ubsan": {"run": 20, "passed": 20},
+  "native_c_clang_ubsan": {"run": 20, "passed": 20},
+  "distinct_test_methods": 35,
+  "full_modified_libsafety": "NOT_RUN_LOCALLY",
+  "panda_mcu_firmware": "NOT_BUILT",
+  "physical_vehicle": "NOT_TESTED",
+  "default_enabled": false,
+  "note": "Clang initially needed the UBSan runtime loaded into the local test harness; after fixing the harness, all 20 C tests passed. No safety assertions were relaxed."
+}
