@@ -1,0 +1,20 @@
+{
+  "status": "PASS_NARROW_POLICY_REPLAY_ONLY",
+  "method": "Bounds-checked unpacked cereal CAN wire extraction, then the same compiled hyundai_fca_proxy.h policy used by the candidate. Host copy is simulated immediately after each source reception.",
+  "source_message": "0x160 on can bus 2",
+  "logs": [
+    {"label": "carrot_segment_0", "framed_events": 86697, "source_frames": 3065, "source_crc_failures": 0, "candidate_immediate_copy_authorizations": 3060},
+    {"label": "carrot_segment_1", "framed_events": 87143, "source_frames": 3001, "source_crc_failures": 0, "candidate_immediate_copy_authorizations": 2999},
+    {"label": "sunnypilot_segment_0", "framed_events": 101306, "source_frames": 3047, "source_crc_failures": 0, "candidate_immediate_copy_authorizations": 3032}
+  ],
+  "totals": {"source_frames": 9113, "source_crc_failures": 0, "candidate_immediate_copy_authorizations": 9091, "not_authorized": 22},
+  "not_authorized_meaning": "Acquisition/sequence/timing gates were not met. These are not CRC failures and not physical vehicle results.",
+  "limits": [
+    "Narrow fixed-schema CAN extraction, not a general capnp implementation",
+    "Immediate host-copy timing is simulated, not actual USB/controller scheduling",
+    "Does not execute complete modified libsafety or complete controller",
+    "Does not prove FCW warning delivery or AEB braking",
+    "Complete modified CI run has not been observed; do not mark CI passed"
+  ],
+  "vehicle_deployment": "NOT_APPROVED"
+}
