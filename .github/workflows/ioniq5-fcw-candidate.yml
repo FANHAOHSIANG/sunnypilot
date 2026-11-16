@@ -1,0 +1,49 @@
+name: Ioniq 5 FCW paired candidate validation
+on:
+  push:
+    branches: ['test/ioniq5-fcw-oem-forwarding']
+    paths: ['tools/fcw_candidate/**', '.github/workflows/ioniq5-fcw-candidate.yml']
+  pull_request:
+    branches: ['hkg-fca-aeb-preservation-lab']
+    paths: ['tools/fcw_candidate/**', '.github/workflows/ioniq5-fcw-candidate.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  paired-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exact baseline and isolated dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init opendbc_repo
+          test "$(git -C opendbc_repo rev-parse HEAD)" = "1c51731784729da5ebaf24b3c34106bd27aaf94b"
+          python -m pip install numpy tqdm pycapnp pycryptodome cffi
+          mkdir -p fcw-results
+          python -m pip freeze > fcw-results/python-dependencies.txt
+      - name: Unmodified Hyundai baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd opendbc_repo
+          PYTHONPATH="$PWD" python -m unittest opendbc.safety.tests.test_hyundai_canfd 2>&1 | tee ../fcw-results/baseline-hyundai.log
+      - name: Actual paired candidate in temporary source tree
+        shell: bash
+        run: bash tools/fcw_candidate/run_ci.sh "$GITHUB_WORKSPACE/opendbc_repo" "$GITHUB_WORKSPACE/fcw-results"
+      - name: Upload evidence and generated patch, never a vehicle image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcw-candidate-${{ github.sha }}
+          path: fcw-results/
+          if-no-files-found: error
+          retention-days: 14
